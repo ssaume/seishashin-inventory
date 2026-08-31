@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="theme-color" content="#fff8fb" />
+  <meta name="theme-color" content="#eef9ff" />
   <title>生寫真收藏庫</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -18,53 +18,42 @@
 
   <main class="shell">
     <section class="stats-grid" aria-label="收藏統計">
-      <article class="stat-card">
-        <span>總張數</span>
-        <strong id="statTotal">0</strong>
-      </article>
-      <article class="stat-card">
-        <span>不同款式</span>
-        <strong id="statUnique">0</strong>
-      </article>
-      <article class="stat-card">
-        <span>可售張數</span>
-        <strong id="statSellable">0</strong>
-      </article>
-      <article class="stat-card">
-        <span>可售總額</span>
-        <strong id="statValue">NT$ 0</strong>
-      </article>
+      <article class="stat-card"><span>總張數</span><strong id="statTotal">0</strong></article>
+      <article class="stat-card"><span>不同款式</span><strong id="statUnique">0</strong></article>
+      <article class="stat-card"><span>生寫真系列</span><strong id="statSeries">0</strong></article>
     </section>
 
     <section class="toolbar">
       <div class="search-wrap">
         <span>⌕</span>
-        <input id="searchInput" type="search" placeholder="搜尋生寫真名或成員名" />
+        <input id="searchInput" type="search" placeholder="搜尋系列、成員、類型2" />
       </div>
       <select id="typeFilter" aria-label="類型篩選">
-        <option value="">全部類型</option>
+        <option value="">全部類型1</option>
         <option value="全身">全身</option>
         <option value="半身">半身</option>
         <option value="大頭">大頭</option>
         <option value="坐姿">坐姿</option>
       </select>
-      <select id="sellFilter" aria-label="販售狀態篩選">
+      <select id="type2Filter" aria-label="類型2篩選">
+        <option value="">全部類型2</option>
+      </select>
+      <select id="statusFilter" aria-label="狀態篩選">
         <option value="">全部狀態</option>
-        <option value="true">可賣</option>
-        <option value="false">非賣</option>
+        <option value="非賣">非賣</option>
+        <option value="可換">可換</option>
+        <option value="可賣">可賣</option>
+        <option value="求">求</option>
       </select>
       <button id="addBtn" class="primary-btn" type="button">＋ 新增生寫真</button>
     </section>
 
     <section>
       <div class="section-head">
-        <div>
-          <p class="eyebrow">COLLECTION</p>
-          <h2>我的收藏</h2>
-        </div>
+        <div><p class="eyebrow">COLLECTION</p><h2>我的收藏</h2></div>
         <span id="resultCount" class="muted">0 筆</span>
       </div>
-      <div id="gallery" class="gallery"></div>
+      <div id="seriesContainer" class="series-container"></div>
       <div id="emptyState" class="empty-state hidden">
         <div class="empty-icon">▧</div>
         <h3>還沒有符合條件的生寫真</h3>
@@ -76,10 +65,7 @@
   <dialog id="entryDialog" class="modal">
     <form id="entryForm" method="dialog">
       <div class="modal-head">
-        <div>
-          <p class="eyebrow">NEW PHOTO</p>
-          <h2>新增生寫真</h2>
-        </div>
+        <div><p class="eyebrow">NEW PHOTO</p><h2>新增生寫真</h2></div>
         <button class="icon-btn" value="cancel" formmethod="dialog" aria-label="關閉">✕</button>
       </div>
 
@@ -96,8 +82,8 @@
 
       <div class="form-grid">
         <label class="full">
-          <span>生寫真名 *</span>
-          <input id="photoName" name="photoName" required placeholder="例如：18th 制服生寫真" />
+          <span>生寫真系列 *</span>
+          <input id="seriesName" name="seriesName" required placeholder="例如：18th 制服生寫真" />
         </label>
         <label>
           <span>成員名 *</span>
@@ -105,12 +91,26 @@
           <datalist id="memberSuggestions"></datalist>
         </label>
         <label>
-          <span>類型 *</span>
+          <span>類型1 *</span>
           <select id="photoType" name="photoType" required>
             <option value="全身">全身</option>
             <option value="半身">半身</option>
             <option value="大頭">大頭</option>
             <option value="坐姿">坐姿</option>
+          </select>
+        </label>
+        <label>
+          <span>類型2</span>
+          <input id="photoType2" name="photoType2" placeholder="自由輸入，例如：ヨリ、チュウ、特典" list="type2Suggestions" />
+          <datalist id="type2Suggestions"></datalist>
+        </label>
+        <label>
+          <span>狀態 *</span>
+          <select id="tradeStatus" name="tradeStatus" required>
+            <option value="非賣">非賣</option>
+            <option value="可換">可換</option>
+            <option value="可賣">可賣</option>
+            <option value="求">求</option>
           </select>
         </label>
         <label>
@@ -120,14 +120,6 @@
         <label>
           <span>單價（NT$）</span>
           <input id="unitPrice" name="unitPrice" type="number" min="0" step="1" value="0" />
-        </label>
-        <label class="switch-row full">
-          <span>
-            <b>可賣</b>
-            <small>開啟後會列入可售張數與總額</small>
-          </span>
-          <input id="sellable" name="sellable" type="checkbox" />
-          <i aria-hidden="true"></i>
         </label>
       </div>
 
@@ -141,29 +133,13 @@
   <dialog id="settingsDialog" class="modal compact">
     <form id="settingsForm" method="dialog">
       <div class="modal-head">
-        <div>
-          <p class="eyebrow">CONNECTION</p>
-          <h2>後端連線設定</h2>
-        </div>
+        <div><p class="eyebrow">CONNECTION</p><h2>後端連線設定</h2></div>
         <button class="icon-btn" value="cancel" formmethod="dialog" aria-label="關閉">✕</button>
       </div>
-
-      <p class="settings-note">
-        API URL 與存取金鑰只儲存在這台裝置的瀏覽器，不會寫進 GitHub。
-        尚未設定時，網站會使用本機 Demo 模式。
-      </p>
-
-      <label>
-        <span>Apps Script Web App URL</span>
-        <input id="apiUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" />
-      </label>
-      <label>
-        <span>存取金鑰</span>
-        <input id="apiSecret" type="password" autocomplete="off" placeholder="與 Script Properties 的 APP_SECRET 相同" />
-      </label>
-
+      <p class="settings-note">API URL 與存取金鑰只儲存在這台裝置的瀏覽器，不會寫進 GitHub。尚未設定時，網站會使用本機 Demo 模式。</p>
+      <label><span>Apps Script Web App URL</span><input id="apiUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" /></label>
+      <label><span>存取金鑰</span><input id="apiSecret" type="password" autocomplete="off" placeholder="與 Script Properties 的 APP_SECRET 相同" /></label>
       <div class="connection-state" id="connectionState">目前：Demo 模式</div>
-
       <div class="modal-actions">
         <button id="clearSettingsBtn" type="button" class="ghost-btn">切回 Demo</button>
         <button type="submit" class="primary-btn">儲存並測試</button>
@@ -173,35 +149,34 @@
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
+  <template id="seriesTemplate">
+    <section class="series-section">
+      <button type="button" class="series-header" aria-expanded="true">
+        <div><span class="series-kicker">SERIES</span><h3 class="series-title"></h3></div>
+        <div class="series-summary"><span class="series-count"></span><span class="series-chevron">⌃</span></div>
+      </button>
+      <div class="series-body"><div class="gallery"></div></div>
+    </section>
+  </template>
+
   <template id="cardTemplate">
     <article class="photo-card">
       <div class="photo-media">
         <img class="card-img" alt="" loading="lazy" />
-        <span class="sale-badge"></span>
+        <span class="status-badge"></span>
       </div>
       <div class="photo-body">
         <div class="photo-title-row">
-          <div>
-            <h3 class="card-name"></h3>
-            <p class="card-member"></p>
-          </div>
+          <div><h3 class="card-member"></h3><p class="card-series"></p></div>
           <span class="type-chip"></span>
         </div>
+        <div class="type2-row hidden"><span class="type2-chip"></span></div>
         <div class="meta-row">
           <span>數量</span>
-          <div class="qty-stepper">
-            <button class="qty-minus" type="button">−</button>
-            <strong class="card-qty"></strong>
-            <button class="qty-plus" type="button">＋</button>
-          </div>
+          <div class="qty-stepper"><button class="qty-minus" type="button">−</button><strong class="card-qty"></strong><button class="qty-plus" type="button">＋</button></div>
         </div>
-        <div class="meta-row">
-          <span>單價</span>
-          <strong class="card-price"></strong>
-        </div>
-        <div class="card-actions">
-          <button class="delete-btn" type="button">刪除</button>
-        </div>
+        <div class="meta-row"><span>單價</span><strong class="card-price"></strong></div>
+        <div class="card-actions"><button class="delete-btn" type="button">刪除</button></div>
       </div>
     </article>
   </template>

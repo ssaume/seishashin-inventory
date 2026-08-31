@@ -1,213 +1,163 @@
-# 生寫真收藏庫 — V1 Prototype
+# 生寫真收藏庫 — V2
 
-這是一個 **GitHub Pages 靜態前端 + Google Apps Script API + Google Drive 儲存** 的單人收藏管理原型。
+## 本次變更
 
-## V1 已包含
+1. 前端主色改為天藍色。
+2. 移除「可售張數」與「可售總額」統計。
+3. 生寫真狀態改為四種：
+   - 非賣
+   - 可換
+   - 可賣
+   - 求
+4. 「生寫真名」改為「生寫真系列」。
+5. 「我的收藏」依生寫真系列分區顯示，各系列可收合。
+6. 新增「類型2」：
+   - 非必填
+   - 自由輸入
+   - 曾輸入過的值會自動成為 datalist 建議值
+   - 首頁「類型2」篩選器會根據現有資料自動產生分類
 
-- 手機直接拍照 / 相簿選圖
-- 圖片上傳前自動縮圖與 JPEG 壓縮
-- 生寫真名
-- 成員名
-- 類型：全身 / 半身 / 大頭 / 坐姿
-- 數量
-- 可賣 / 非賣
-- 單價
-- 收藏總張數、不同款式、可售張數、可售總額
-- 名稱 / 成員搜尋
-- 類型與販售狀態篩選
-- 數量 +1 / -1
-- 刪除
-- 未設定後端時可用 Demo 模式
-
-## 架構
-
-```text
-Browser / Mobile
-     |
-     | HTTPS
-     v
-GitHub Pages
-(index.html / styles.css / app.js)
-     |
-     | POST text/plain JSON
-     v
-Google Apps Script Web App
-     |
-     +---- Google Drive / 生寫真網站資料 / images
-     |
-     +---- Google Sheet / 生寫真庫存資料
-```
-
-> Google Sheet 本身也是 Google Drive 裡的檔案，這裡把它當 metadata index 使用。
-> 圖片本體全部放 Google Drive。
-
----
-
-# A. 建立 Google Drive 後端
-
-## 1. 建立 Apps Script
-
-1. 前往 https://script.google.com/
-2. 建立「新專案」
-3. 將 `backend/Code.gs` 全部貼進預設的 `Code.gs`
-4. 儲存
-
-## 2. 初始化 Drive / Sheet
-
-在 Apps Script 上方函式選單選 `setupStorage`，按「執行」。
-
-第一次會要求 Google Drive / Spreadsheet 權限，完成授權。
-
-它會自動建立：
-
-```text
-我的雲端硬碟
-└─ 生寫真網站資料
-   ├─ images/
-   └─ 生寫真庫存資料（Google Sheet）
-```
-
-並把檔案 ID 放進 Apps Script 的 Script Properties。
-
-## 3. 設定 APP_SECRET
-
-不要把 secret 寫進 GitHub。
-
-Apps Script：
-
-**Project Settings → Script Properties → Add script property**
-
-新增：
-
-```text
-Property: APP_SECRET
-Value:    自己產生一段長的隨機字串
-```
-
-建議至少 32 字元。
-
-例如可以由密碼管理器產生，不要使用範例字串。
-
-## 4. 發布 Apps Script Web App
-
-Apps Script 右上：
-
-**Deploy → New deployment → Select type: Web app**
-
-設定：
-
-```text
-Execute as: Me
-Who has access: Anyone
-```
-
-部署後複製結尾為 `/exec` 的 Web App URL。
-
-> 注意：這個 API 雖然是 Anyone 可呼叫，但所有 POST 動作仍需通過 APP_SECRET。
-> APP_SECRET 不會存在 GitHub repo；只會在你使用網站時存在瀏覽器 localStorage。
-
----
-
-# B. GitHub Pages 部署
-
-## 最簡單版本
-
-建立一個 GitHub repository，例如：
-
-```text
-seishashin-inventory
-```
-
-把以下 3 個檔案放在 repository 根目錄：
-
-```text
-index.html
-styles.css
-app.js
-```
-
-`backend/` 與 README 可以一起放，但不是網站執行必要檔案。
-
-然後：
-
-1. GitHub repository → **Settings**
-2. 左側 **Pages**
-3. Build and deployment → Source 選 **Deploy from a branch**
-4. Branch 選 `main`
-5. Folder 選 `/(root)`
-6. Save
-
-之後 GitHub 會產生 Pages 網址。
-
----
-
-# C. 第一次打開網站
-
-1. 打開 GitHub Pages 網址
-2. 點右上角齒輪
-3. 貼上 Apps Script `/exec` URL
-4. 輸入 APP_SECRET
-5. 「儲存並測試」
-
-連線成功後，網站會切換成 Google Drive 模式。
-
-若沒有設定，會使用 Demo 模式，資料只存在該瀏覽器。
-
----
-
-# V1 的資料表
+## V2 資料結構
 
 | 欄位 | 說明 |
 |---|---|
 | id | UUID |
 | createdAt | 建立時間 |
-| updatedAt | 更新時間 |
-| photoName | 生寫真名 |
+| updatedAt | 修改時間 |
+| seriesName | 生寫真系列 |
 | memberName | 成員名 |
-| type | 全身 / 半身 / 大頭 / 坐姿 |
+| type | 類型1：全身 / 半身 / 大頭 / 坐姿 |
+| type2 | 類型2，自由輸入，可空白 |
 | quantity | 數量 |
-| sellable | TRUE / FALSE |
+| tradeStatus | 非賣 / 可換 / 可賣 / 求 |
 | unitPrice | 單價 |
-| imageFileId | Google Drive File ID |
-| imageUrl | 前端顯示縮圖 URL |
+| imageFileId | Drive 圖片 ID |
+| imageUrl | 顯示縮圖 URL |
+
+## 首頁統計
+
+只保留：
+
+- 總張數
+- 不同款式
+- 生寫真系列數
+
+不再計算：
+
+- 可售張數
+- 可售總額
+
+## 我的收藏分區
+
+第一層固定依 `seriesName` 分區：
+
+```text
+18th 制服生寫真
+├─ 松尾桜 / 全身
+├─ 松尾桜 / 半身 / ヨリ
+└─ 大田美月 / 大頭
+
+五期生 LIVE
+├─ 大野愛実 / 大頭 / 特典
+└─ 松尾桜 / 坐姿
+```
+
+每一個系列區塊可以點擊標題收合。
+
+## 類型2
+
+類型1仍固定為：
+
+- 全身
+- 半身
+- 大頭
+- 坐姿
+
+類型2則可以自由輸入，例如：
+
+- ヨリ
+- チュウ
+- ヒキ
+- 特典
+- 会場限定
+- 制服
+
+當資料庫中存在某個類型2，首頁會自動把它加入「全部類型2」旁的篩選選項，因此可直接按照自由輸入的值分類檢視。
 
 ---
 
-# 重要限制 / V2 建議
+# 如果已經部署 V1
 
-## 圖片公開層級
+## Google Apps Script
 
-目前 V1 為了讓 GitHub Pages 可以直接載入 Drive 圖片，Apps Script 會嘗試把上傳圖片設成：
+1. 用 V2 `backend/Code.gs` 覆蓋原本 Code.gs。
+2. 儲存。
+3. 在函式下拉選單執行：
 
-**Anyone with the link / Viewer**
+```text
+migrateToV2
+```
 
-也就是「知道圖片連結的人可以看到」。
+這會把 V1：
 
-這適合先做個人收藏 MVP，但若你希望圖片維持完全私人，V2 應改成：
+```text
+photoName -> seriesName
+sellable = TRUE  -> tradeStatus = 可賣
+sellable = FALSE -> tradeStatus = 非賣
+```
 
-- GitHub Pages 前端
-- Google OAuth 登入
-- 私有 Apps Script / Google Cloud API
-- 由授權 API 代理圖片，不使用公開 Drive thumbnail URL
+並增加：
 
-## API 安全性
+```text
+type2
+tradeStatus
+```
 
-目前 APP_SECRET 是「單一使用者存取金鑰」：
-- 不放在 GitHub
-- 放在 Apps Script Script Properties
-- 使用者端只存在 localStorage
+原本圖片與紀錄會保留。
 
-如果之後要多人共用，應升級為 Google Login / OAuth，而不是共用 APP_SECRET。
+接著重新發布：
 
-## 建議的 V2 功能
+```text
+Deploy
+→ Manage deployments
+→ Edit
+→ Version: New version
+→ Deploy
+```
 
-- 編輯完整資料
-- 成員主檔 / 團別 / 期別
-- 生寫真系列主檔
-- 同系列四種 pose 自動分組
-- 缺圖提示（全身、半身、大頭、坐姿缺哪張）
-- 重複張數 / 可交換數量
-- 販售狀態與成交紀錄
-- 批次上傳
-- CSV 匯入 / 匯出
-- PWA 安裝到手機桌面
+既有 `/exec` URL 通常可以繼續使用。
+
+## GitHub Pages
+
+用 V2 覆蓋 repository 根目錄：
+
+```text
+index.html
+styles.css
+app.js
+.nojekyll
+```
+
+commit / push 後，GitHub Pages 會更新。
+
+---
+
+# 第一次部署
+
+前端仍採：
+
+```text
+GitHub Pages
+      ↓
+Google Apps Script Web App
+      ↓
+Google Drive images + Google Sheet metadata
+```
+
+Apps Script 先執行 `setupStorage()`，並在 Script Properties 設定：
+
+```text
+APP_SECRET
+```
+
+部署 Web App 後，把 `/exec` URL 與 APP_SECRET 填入網站右上角設定即可。
