@@ -24,6 +24,13 @@ const HEADERS = [
   'quantity', 'tradeStatus', 'unitPrice',
   'imageFileId', 'imageUrl'
 ];
+const CSV_HEADERS = [
+  'ID', '建立時間', '更新時間',
+  '生寫真系列', '成員名',
+  '類型1', '類型2',
+  '數量', '狀態', '單價',
+  '圖片File ID', '圖片URL'
+];
 
 function setupStorage() {
   const props = PropertiesService.getScriptProperties();
@@ -170,6 +177,14 @@ function doPost(e) {
       case 'list':
         return json_({ ok: true, items: listItems_() });
 
+      case 'exportData':
+        return json_({ ok: true, items: listItems_() });
+
+      case 'replaceAll': {
+        const result = replaceAllItems_(req.items || []);
+        return json_({ ok: true, ...result });
+      }
+
       case 'create':
         return json_({ ok: true, item: createItem_(req.item, req.image) });
 
@@ -216,6 +231,117 @@ function listItems_() {
     .map(rowToItem_)
     .filter(Boolean)
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+}
+
+function replaceAllItems_(items) {
+  if (!Array.isArray(items)) throw new Error('Items must be an array.');
+
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const normalized = items.map((item, index) => {
+    const candidate = {
+      id: String(item.id || '').trim() || Utilities.getUuid(),
+      createdAt: String(item.createdAt || '').trim() || nowIso,
+      updatedAt: nowIso,
+      seriesName: String(item.seriesName || '').trim(),
+      memberName: String(item.memberName || '').trim(),
+      type: String(item.type || '').trim(),
+      type2: String(item.type2 || '').trim(),
+      quantity: Number(item.quantity),
+      tradeStatus: String(item.tradeStatus || '').trim(),
+      unitPrice: item.unitPrice === '' || item.unitPrice === null || item.unitPrice === undefined
+        ? 0
+        : Number(item.unitPrice),
+      imageFileId: String(item.imageFileId || '').trim(),
+      imageUrl: String(item.imageUrl || '').trim()
+    };
+    try {
+      validateItem_(candidate);
+    } catch (err) {
+      throw new Error('第 ' + (index + 2) + ' 列：' + err.message);
+    }
+    return candidate;
+  });
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    const sheet = getSheet_();
+    const oldRows = sheet.getLastRow() > 1
+      ? sheet.getRange(2, 1, sheet.getLastRow() - 1, HEADERS.length).getValues()
+      : [];
+
+    const backupFile = backupRows_(oldRows, now);
+
+    try {
+      if (sheet.getLastRow() > 1) {
+        sheet.getRange(2, 1, sheet.getLastRow() - 1, HEADERS.length).clearContent();
+      }
+      if (normalized.length) {
+        sheet.getRange(2, 1, normalized.length, HEADERS.length)
+          .setValues(normalized.map(itemToRow_));
+      }
+      const extraRows = sheet.getLastRow() - (normalized.length + 1);
+      if (extraRows > 0) {
+        sheet.getRange(normalized.length + 2, 1, extraRows, HEADERS.length).clearContent();
+      }
+      sheet.setFrozenRows(1);
+      SpreadsheetApp.flush();
+    } catch (writeErr) {
+      sheet.clearContents();
+      sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+      if (oldRows.length) {
+        sheet.getRange(2, 1, oldRows.length, HEADERS.length).setValues(oldRows);
+      }
+      sheet.setFrozenRows(1);
+      SpreadsheetApp.flush();
+      throw new Error('覆蓋失敗，已自動還原原資料：' + writeErr.message);
+    }
+
+    return {
+      count: normalized.length,
+      backupFileName: backupFile.getName(),
+      backupFileId: backupFile.getId()
+    };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function backupRows_(rows, timestamp) {
+  const folder = getBackupFolder_();
+  const name = '生寫真資料備份_' + formatBackupTimestamp_(timestamp) + '.csv';
+  const lines = [CSV_HEADERS.map(csvEscape_).join(',')];
+  rows.forEach(row => lines.push(row.map(csvEscape_).join(',')));
+  const csv = '\uFEFF' + lines.join('\r\n');
+  return folder.createFile(name, csv, 'text/csv');
+}
+
+function getBackupFolder_() {
+  const props = PropertiesService.getScriptProperties();
+  const existingId = props.getProperty('BACKUP_FOLDER_ID');
+  if (existingId) {
+    try { return DriveApp.getFolderById(existingId); }
+    catch (err) { console.warn('Backup folder id invalid, recreating.'); }
+  }
+
+  const rootId = props.getProperty('ROOT_FOLDER_ID');
+  if (!rootId) throw new Error('ROOT_FOLDER_ID is missing. Run setupStorage() first.');
+  const root = DriveApp.getFolderById(rootId);
+  const folders = root.getFoldersByName('backups');
+  const folder = folders.hasNext() ? folders.next() : root.createFolder('backups');
+  props.setProperty('BACKUP_FOLDER_ID', folder.getId());
+  return folder;
+}
+
+function formatBackupTimestamp_(date) {
+  return Utilities.formatDate(date, Session.getScriptTimeZone() || 'Asia/Taipei', 'yyyyMMdd_HHmmss');
+}
+
+function csvEscape_(value) {
+  const text = value === null || value === undefined ? '' : String(value);
+  if (/[",\r\n]/.test(text)) return '"' + text.replace(/"/g, '""') + '"';
+  return text;
 }
 
 function createItem_(item, image) {

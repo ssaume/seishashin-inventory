@@ -45,7 +45,12 @@
         <option value="可賣">可賣</option>
         <option value="求">求</option>
       </select>
-      <button id="addBtn" class="primary-btn" type="button">＋ 新增生寫真</button>
+      <div class="toolbar-actions">
+        <button id="downloadBtn" class="ghost-btn data-btn" type="button">⇩ 下載 CSV</button>
+        <button id="uploadBtn" class="ghost-btn data-btn" type="button">⇧ 上傳 CSV</button>
+        <input id="csvInput" type="file" accept=".csv,text/csv" hidden />
+        <button id="addBtn" class="primary-btn" type="button">＋ 新增生寫真</button>
+      </div>
     </section>
 
     <section>
@@ -66,7 +71,7 @@
     <form id="entryForm" method="dialog">
       <div class="modal-head">
         <div><p class="eyebrow">NEW PHOTO</p><h2>新增生寫真</h2></div>
-        <button class="icon-btn" value="cancel" formmethod="dialog" aria-label="關閉">✕</button>
+        <button id="entryCloseBtn" class="icon-btn" type="button" aria-label="關閉">✕</button>
       </div>
 
       <div class="upload-box">
@@ -118,7 +123,7 @@
           <input id="quantity" name="quantity" type="number" min="1" step="1" value="1" required />
         </label>
         <label>
-          <span>單價（NT$）</span>
+          <span>單價</span>
           <input id="unitPrice" name="unitPrice" type="number" min="0" step="1" value="0" />
         </label>
       </div>
@@ -134,7 +139,7 @@
     <form id="settingsForm" method="dialog">
       <div class="modal-head">
         <div><p class="eyebrow">CONNECTION</p><h2>後端連線設定</h2></div>
-        <button class="icon-btn" value="cancel" formmethod="dialog" aria-label="關閉">✕</button>
+        <button id="settingsCloseBtn" class="icon-btn" type="button" aria-label="關閉">✕</button>
       </div>
       <p class="settings-note">API URL 與存取金鑰只儲存在這台裝置的瀏覽器，不會寫進 GitHub。尚未設定時，網站會使用本機 Demo 模式。</p>
       <label><span>Apps Script Web App URL</span><input id="apiUrl" type="url" placeholder="https://script.google.com/macros/s/.../exec" /></label>

@@ -1,163 +1,56 @@
-# 生寫真收藏庫 — V2
+# 生寫真收藏庫 — V3
 
-## 本次變更
+V3 在 V2.1 基礎上新增 CSV 匯出 / 覆蓋匯入 / 自動備份。
 
-1. 前端主色改為天藍色。
-2. 移除「可售張數」與「可售總額」統計。
-3. 生寫真狀態改為四種：
-   - 非賣
-   - 可換
-   - 可賣
-   - 求
-4. 「生寫真名」改為「生寫真系列」。
-5. 「我的收藏」依生寫真系列分區顯示，各系列可收合。
-6. 新增「類型2」：
-   - 非必填
-   - 自由輸入
-   - 曾輸入過的值會自動成為 datalist 建議值
-   - 首頁「類型2」篩選器會根據現有資料自動產生分類
+## 新功能
 
-## V2 資料結構
-
-| 欄位 | 說明 |
-|---|---|
-| id | UUID |
-| createdAt | 建立時間 |
-| updatedAt | 修改時間 |
-| seriesName | 生寫真系列 |
-| memberName | 成員名 |
-| type | 類型1：全身 / 半身 / 大頭 / 坐姿 |
-| type2 | 類型2，自由輸入，可空白 |
-| quantity | 數量 |
-| tradeStatus | 非賣 / 可換 / 可賣 / 求 |
-| unitPrice | 單價 |
-| imageFileId | Drive 圖片 ID |
-| imageUrl | 顯示縮圖 URL |
-
-## 首頁統計
-
-只保留：
-
-- 總張數
-- 不同款式
-- 生寫真系列數
-
-不再計算：
-
-- 可售張數
-- 可售總額
-
-## 我的收藏分區
-
-第一層固定依 `seriesName` 分區：
+- **下載 CSV**：每次從 Google Drive 後端重新讀取資料後下載。
+- 若後端是空的，下載 `生寫真匯入模板.csv`。
+- **上傳 CSV**：只能使用本系統模板欄位；匯入後會**覆蓋**目前後端資料。
+- 覆蓋前，Apps Script 會先將原資料另存成 CSV 到：
 
 ```text
-18th 制服生寫真
-├─ 松尾桜 / 全身
-├─ 松尾桜 / 半身 / ヨリ
-└─ 大田美月 / 大頭
-
-五期生 LIVE
-├─ 大野愛実 / 大頭 / 特典
-└─ 松尾桜 / 坐姿
+生寫真網站資料/
+├─ images/
+├─ backups/
+│  └─ 生寫真資料備份_YYYYMMDD_HHMMSS.csv
+└─ 生寫真庫存資料 (Google Sheet)
 ```
 
-每一個系列區塊可以點擊標題收合。
+- 圖片檔在 CSV 覆蓋時**不會被刪除**。匯出檔會保留 `圖片File ID` 與 `圖片URL`，因此舊資料備份仍能指回原圖片。
 
-## 類型2
-
-類型1仍固定為：
-
-- 全身
-- 半身
-- 大頭
-- 坐姿
-
-類型2則可以自由輸入，例如：
-
-- ヨリ
-- チュウ
-- ヒキ
-- 特典
-- 会場限定
-- 制服
-
-當資料庫中存在某個類型2，首頁會自動把它加入「全部類型2」旁的篩選選項，因此可直接按照自由輸入的值分類檢視。
-
----
-
-# 如果已經部署 V1
-
-## Google Apps Script
-
-1. 用 V2 `backend/Code.gs` 覆蓋原本 Code.gs。
-2. 儲存。
-3. 在函式下拉選單執行：
+## CSV 欄位
 
 ```text
-migrateToV2
+ID,建立時間,更新時間,生寫真系列,成員名,類型1,類型2,數量,狀態,單價,圖片File ID,圖片URL
 ```
 
-這會把 V1：
+### 手動建立新資料時
 
-```text
-photoName -> seriesName
-sellable = TRUE  -> tradeStatus = 可賣
-sellable = FALSE -> tradeStatus = 非賣
-```
+必填：
+- 生寫真系列
+- 成員名
+- 類型1：全身 / 半身 / 大頭 / 坐姿
+- 數量：1 以上整數
+- 狀態：非賣 / 可換 / 可賣 / 求
 
-並增加：
+可留白：
+- ID（後端自動產生）
+- 建立時間（後端自動產生）
+- 更新時間（後端自動更新）
+- 類型2
+- 單價（空白視為 0）
+- 圖片File ID
+- 圖片URL
 
-```text
-type2
-tradeStatus
-```
+> CSV 建議用 Excel 的 **CSV UTF-8** 格式儲存。
 
-原本圖片與紀錄會保留。
+## 從 V2.1 升級
 
-接著重新發布：
+1. GitHub Pages 覆蓋 `index.html`、`styles.css`、`app.js`。
+2. Apps Script 用新的 `backend/Code.gs` 覆蓋舊版本。
+3. 不需要執行資料遷移，V2 資料表格式沒有改變。
+4. Apps Script：`Deploy → Manage deployments → Edit → New version → Deploy`。
+5. 保持原本 `/exec` URL 與 `APP_SECRET` 即可。
 
-```text
-Deploy
-→ Manage deployments
-→ Edit
-→ Version: New version
-→ Deploy
-```
-
-既有 `/exec` URL 通常可以繼續使用。
-
-## GitHub Pages
-
-用 V2 覆蓋 repository 根目錄：
-
-```text
-index.html
-styles.css
-app.js
-.nojekyll
-```
-
-commit / push 後，GitHub Pages 會更新。
-
----
-
-# 第一次部署
-
-前端仍採：
-
-```text
-GitHub Pages
-      ↓
-Google Apps Script Web App
-      ↓
-Google Drive images + Google Sheet metadata
-```
-
-Apps Script 先執行 `setupStorage()`，並在 Script Properties 設定：
-
-```text
-APP_SECRET
-```
-
-部署 Web App 後，把 `/exec` URL 與 APP_SECRET 填入網站右上角設定即可。
+第一次執行 CSV 覆蓋時，`backups` 資料夾會自動建立。

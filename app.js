@@ -1,5 +1,19 @@
 const STORAGE_KEY = "seishashin-inventory-demo-v2";
 const SETTINGS_KEY = "seishashin-inventory-settings-v1";
+const CSV_COLUMNS = [
+  ["id", "ID"],
+  ["createdAt", "建立時間"],
+  ["updatedAt", "更新時間"],
+  ["seriesName", "生寫真系列"],
+  ["memberName", "成員名"],
+  ["type", "類型1"],
+  ["type2", "類型2"],
+  ["quantity", "數量"],
+  ["tradeStatus", "狀態"],
+  ["unitPrice", "單價"],
+  ["imageFileId", "圖片File ID"],
+  ["imageUrl", "圖片URL"]
+];
 const PLACEHOLDER = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="600" height="800">
   <rect width="100%" height="100%" fill="#edf8fe"/>
@@ -15,7 +29,11 @@ const els = {
   entryDialog: document.querySelector("#entryDialog"),
   entryForm: document.querySelector("#entryForm"),
   addBtn: document.querySelector("#addBtn"),
+  downloadBtn: document.querySelector("#downloadBtn"),
+  uploadBtn: document.querySelector("#uploadBtn"),
+  csvInput: document.querySelector("#csvInput"),
   cancelEntryBtn: document.querySelector("#cancelEntryBtn"),
+  entryCloseBtn: document.querySelector("#entryCloseBtn"),
   imageInput: document.querySelector("#imageInput"),
   imagePickerBtn: document.querySelector("#imagePickerBtn"),
   imagePreview: document.querySelector("#imagePreview"),
@@ -36,6 +54,7 @@ const els = {
   apiSecret: document.querySelector("#apiSecret"),
   connectionState: document.querySelector("#connectionState"),
   clearSettingsBtn: document.querySelector("#clearSettingsBtn"),
+  settingsCloseBtn: document.querySelector("#settingsCloseBtn"),
   memberSuggestions: document.querySelector("#memberSuggestions"),
   type2Suggestions: document.querySelector("#type2Suggestions"),
   saveEntryBtn: document.querySelector("#saveEntryBtn")
@@ -175,7 +194,7 @@ function buildCard(record) {
   node.querySelector(".card-series").textContent = record.seriesName;
   node.querySelector(".type-chip").textContent = record.type;
   node.querySelector(".card-qty").textContent = record.quantity;
-  node.querySelector(".card-price").textContent = `NT$ ${Number(record.unitPrice || 0).toLocaleString()}`;
+  node.querySelector(".card-price").textContent = Number(record.unitPrice || 0).toLocaleString();
 
   const badge = node.querySelector(".status-badge");
   badge.textContent = record.tradeStatus;
@@ -245,8 +264,142 @@ async function deleteRecord(record) {
   }
 }
 
+function csvEscape(value) {
+  const text = value === null || value === undefined ? "" : String(value);
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+function recordsToCsv(items) {
+  const header = CSV_COLUMNS.map(([, label]) => csvEscape(label)).join(",");
+  const rows = items.map(item =>
+    CSV_COLUMNS.map(([key]) => csvEscape(item[key] ?? "")).join(",")
+  );
+  return "\uFEFF" + [header, ...rows].join("\r\n");
+}
+function downloadTextFile(filename, text, mime = "text/csv;charset=utf-8") {
+  const blob = new Blob([text], { type: mime });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+function formatFileTimestamp(date = new Date()) {
+  const pad = n => String(n).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth()+1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}`;
+}
+function parseCsv(text) {
+  const src = String(text || "").replace(/^\uFEFF/, "");
+  const rows = [];
+  let row = [], field = "", quoted = false;
+  for (let i = 0; i < src.length; i++) {
+    const ch = src[i];
+    if (quoted) {
+      if (ch === '"' && src[i + 1] === '"') { field += '"'; i++; }
+      else if (ch === '"') quoted = false;
+      else field += ch;
+    } else {
+      if (ch === '"') quoted = true;
+      else if (ch === ',') { row.push(field); field = ""; }
+      else if (ch === '\n') {
+        row.push(field.replace(/\r$/, ""));
+        rows.push(row);
+        row = []; field = "";
+      } else field += ch;
+    }
+  }
+  if (quoted) throw new Error("CSV 引號格式不完整");
+  if (field.length || row.length) { row.push(field.replace(/\r$/, "")); rows.push(row); }
+  return rows.filter(r => r.some(v => String(v).trim() !== ""));
+}
+function csvRowsToRecords(rows) {
+  if (!rows.length) throw new Error("CSV 沒有欄位標題");
+  const labels = CSV_COLUMNS.map(([, label]) => label);
+  const header = rows[0].map(v => String(v).trim());
+  const missing = labels.filter(label => !header.includes(label));
+  if (missing.length) throw new Error(`模板欄位不完整：缺少 ${missing.join("、")}`);
+  const index = Object.fromEntries(header.map((label, i) => [label, i]));
+  const result = [];
+  for (let r = 1; r < rows.length; r++) {
+    const values = rows[r];
+    if (!values.some(v => String(v).trim() !== "")) continue;
+    const item = {};
+    CSV_COLUMNS.forEach(([key, label]) => item[key] = values[index[label]] ?? "");
+    item.seriesName = String(item.seriesName).trim();
+    item.memberName = String(item.memberName).trim();
+    item.type = String(item.type).trim();
+    item.type2 = String(item.type2 || "").trim();
+    item.tradeStatus = String(item.tradeStatus).trim();
+    item.quantity = Number(item.quantity);
+    item.unitPrice = item.unitPrice === "" ? 0 : Number(item.unitPrice);
+    if (!item.seriesName) throw new Error(`第 ${r + 1} 列：生寫真系列不可空白`);
+    if (!item.memberName) throw new Error(`第 ${r + 1} 列：成員名不可空白`);
+    if (!["全身", "半身", "大頭", "坐姿"].includes(item.type)) throw new Error(`第 ${r + 1} 列：類型1必須為全身、半身、大頭或坐姿`);
+    if (!["非賣", "可換", "可賣", "求"].includes(item.tradeStatus)) throw new Error(`第 ${r + 1} 列：狀態必須為非賣、可換、可賣或求`);
+    if (!Number.isInteger(item.quantity) || item.quantity < 1) throw new Error(`第 ${r + 1} 列：數量必須為 1 以上整數`);
+    if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) throw new Error(`第 ${r + 1} 列：單價不可小於 0`);
+    result.push(item);
+  }
+  return result;
+}
+
+els.downloadBtn.addEventListener("click", async () => {
+  try {
+    if (!isRemoteMode()) {
+      downloadTextFile("生寫真匯入模板.csv", recordsToCsv([]));
+      return showToast("尚未連接後端，已下載 CSV 模板");
+    }
+    els.downloadBtn.disabled = true;
+    els.downloadBtn.textContent = "下載中…";
+    const data = await api("exportData");
+    const items = (data.items || []).map(normalizeRecord);
+    if (!items.length) {
+      downloadTextFile("生寫真匯入模板.csv", recordsToCsv([]));
+      showToast("後端目前沒有資料，已下載模板");
+    } else {
+      downloadTextFile(`生寫真收藏_${formatFileTimestamp()}.csv`, recordsToCsv(items));
+      showToast(`已下載 ${items.length} 筆資料`);
+    }
+  } catch (err) {
+    showToast(`下載失敗：${err.message}`);
+  } finally {
+    els.downloadBtn.disabled = false;
+    els.downloadBtn.textContent = "⇩ 下載 CSV";
+  }
+});
+
+els.uploadBtn.addEventListener("click", () => {
+  if (!isRemoteMode()) return showToast("請先連接 Google Drive 後端再上傳");
+  els.csvInput.value = "";
+  els.csvInput.click();
+});
+
+els.csvInput.addEventListener("change", async () => {
+  const file = els.csvInput.files?.[0];
+  if (!file) return;
+  try {
+    const text = await file.text();
+    const imported = csvRowsToRecords(parseCsv(text));
+    if (!confirm(`即將用 CSV 的 ${imported.length} 筆資料覆蓋後端目前資料。\n\n覆蓋前系統會先自動備份。確定繼續嗎？`)) return;
+    els.uploadBtn.disabled = true;
+    els.uploadBtn.textContent = "上傳中…";
+    const data = await api("replaceAll", { items: imported });
+    await loadRecords();
+    showToast(`已覆蓋 ${data.count} 筆；備份：${data.backupFileName}`);
+  } catch (err) {
+    showToast(`上傳失敗：${err.message}`);
+  } finally {
+    els.uploadBtn.disabled = false;
+    els.uploadBtn.textContent = "⇧ 上傳 CSV";
+    els.csvInput.value = "";
+  }
+});
+
 els.addBtn.addEventListener("click", () => els.entryDialog.showModal());
 els.cancelEntryBtn.addEventListener("click", () => els.entryDialog.close());
+els.entryCloseBtn.addEventListener("click", () => els.entryDialog.close());
 els.imagePickerBtn.addEventListener("click", () => els.imageInput.click());
 
 els.imageInput.addEventListener("change", async () => {
@@ -333,6 +486,8 @@ els.searchInput.addEventListener("input", render);
 els.typeFilter.addEventListener("change", render);
 els.type2Filter.addEventListener("change", render);
 els.statusFilter.addEventListener("change", render);
+
+els.settingsCloseBtn.addEventListener("click", () => els.settingsDialog.close());
 
 els.settingsBtn.addEventListener("click", () => {
   const s = getSettings();
