@@ -37,3 +37,60 @@ V5 的 `getSheet_()` 也會自動補上 V5 新欄位標題，因此即使忘了�
 ID, 建立時間, 更新時間, 生寫真系列, 成員名, 類型1, 類型2, 數量, 狀態, 單價, 圖片File ID, 圖片URL, 預約交換, 預約購買
 
 「預約交換」「預約購買」可留空，匯入時會視為 0。
+
+
+## V5.1 修正：舊版資料表自動升級
+
+V5.1 不再要求既有 `photos` 工作表的欄位順序與 V5 完全一致。
+
+支援辨識：
+- V1：`photoName` + `sellable`
+- V2/V3/V4：`seriesName` + `tradeStatus`
+- 過渡格式：`seriesName` + `sellable`
+
+升級時會：
+1. 先把目前資料表完整備份成 CSV 到 `生寫真網站資料/backups`
+2. 依欄位名稱而不是欄位位置讀取舊資料
+3. 自動轉換 `photoName -> seriesName`
+4. 自動轉換 `sellable -> tradeStatus`
+5. 自動新增 `reservedExchange = 0`
+6. 自動新增 `reservedPurchase = 0`
+7. 若寫入新格式失敗，會立即把原工作表內容還原
+
+### 升級步驟
+
+1. 用 V5.1 的 `backend/Code.gs` 覆蓋 Apps Script
+2. 儲存
+3. 手動執行一次 `migrateToV5()`
+4. 確認執行成功
+5. Deploy → Manage deployments → Edit → New version → Deploy
+6. 回網站重新整理
+
+正常情況下，原本的圖片、ID、數量、系列、成員、狀態、單價都會保留。
+
+
+## V5.2 小更新
+
+管理端已新增「類型1」直接修改功能。
+
+每張已新增的生寫真卡片可以在管理模式直接切換：
+- 全身
+- 半身
+- 大頭
+- 坐姿
+
+修改後會即時寫回 Google Sheet。
+
+分享檢視模式仍為唯讀，只顯示更新後的類型1，不提供修改功能。
+
+### 升級方式
+
+前端更新：
+- index.html
+- app.js
+
+後端更新：
+- backend/Code.gs
+
+資料表 schema 沒有改，不需要執行 migration。
+重新發布 Apps Script 新版本即可。

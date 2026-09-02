@@ -1,5 +1,5 @@
 /**
- * 生寫真收藏庫 V5 - Google Apps Script backend
+ * 生寫真收藏庫 V5.2 - Google Apps Script backend
  *
  * 圖片：Google Drive / images
  * 屬性：Google Sheet
@@ -213,6 +213,9 @@ function doPost(e) {
       case 'adjustQty':
         return json_({ ok: true, item: adjustQty_(req.id, req.quantity) });
 
+      case 'updateType':
+        return json_({ ok: true, item: updateType_(req.id, req.type) });
+
       case 'updateStatus':
         return json_({ ok: true, item: updateStatus_(req.id, req.tradeStatus) });
 
@@ -294,65 +297,308 @@ function publicItems_() {
 }
 
 function getSheet_() {
-  const id = PropertiesService.getScriptProperties().getProperty('SPREADSHEET_ID');
-  if (!id) throw new Error('Storage is not initialized. Run setupStorage() first.');
+  const id = PropertiesService
+    .getScriptProperties()
+    .getProperty('SPREADSHEET_ID');
+
+  if (!id) {
+    throw new Error('Storage is not initialized. Run setupStorage() first.');
+  }
 
   const ss = SpreadsheetApp.openById(id);
   const sheet = ss.getSheetByName(SHEET_NAME);
-  if (!sheet) throw new Error('Metadata sheet is missing.');
 
-  ensureV5Headers_(sheet);
+  if (!sheet) {
+    throw new Error('Metadata sheet is missing.');
+  }
+
+  ensureCompatibleSchema_(sheet);
   return sheet;
 }
 
-function ensureV5Headers_(sheet) {
-  const current = sheet
-    .getRange(1, 1, 1, Math.max(sheet.getLastColumn(), HEADERS.length))
-    .getValues()[0]
-    .slice(0, HEADERS.length)
-    .map(String);
-
-  const expectedPrefix = HEADERS.slice(0, 12);
-
-  const hasCompatiblePrefix = expectedPrefix.every(
-    (header, i) => !current[i] || current[i] === header
-  );
-
-  if (!hasCompatiblePrefix) {
-    throw new Error('資料表欄位格式與 V5 不相容，請先確認 photos 工作表欄位。');
-  }
-
-  if (current.join('|') !== HEADERS.join('|')) {
+function ensureCompatibleSchema_(sheet) {
+  if (sheet.getLastRow() === 0) {
     sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
     sheet.setFrozenRows(1);
+    return;
   }
+
+  const currentHeaders = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0]
+    .map(v => String(v || '').trim());
+
+  if (currentHeaders.join('|') === HEADERS.join('|')) {
+    return;
+  }
+
+  const recognized = detectSchema_(currentHeaders);
+
+  if (!recognized) {
+    throw new Error(
+      '無法辨識目前 photos 工作表欄位。請先執行 migrateToV5()；若仍失敗，請確認第一列欄位名稱。'
+    );
+  }
+
+  migrateSheetToV5_(sheet, currentHeaders);
+}
+
+function detectSchema_(headers) {
+  const set = new Set(headers.filter(Boolean));
+
+  if (set.has('seriesName') && set.has('tradeStatus')) {
+    return 'V2_OR_LATER';
+  }
+
+  if (set.has('photoName') && set.has('sellable')) {
+    return 'V1';
+  }
+
+  if (set.has('seriesName') && set.has('sellable')) {
+    return 'TRANSITIONAL';
+  }
+
+  return null;
 }
 
 function migrateToV5() {
-  const sheet = getSheet_();
-  ensureV5Headers_(sheet);
+  const id = PropertiesService
+    .getScriptProperties()
+    .getProperty('SPREADSHEET_ID');
 
-  if (sheet.getLastRow() > 1) {
-    const exCol = HEADERS.indexOf('reservedExchange') + 1;
-    const buyCol = HEADERS.indexOf('reservedPurchase') + 1;
-    const rowCount = sheet.getLastRow() - 1;
-
-    const exValues = sheet.getRange(2, exCol, rowCount, 1).getValues();
-    const buyValues = sheet.getRange(2, buyCol, rowCount, 1).getValues();
-
-    exValues.forEach(row => {
-      if (row[0] === '' || row[0] === null) row[0] = 0;
-    });
-    buyValues.forEach(row => {
-      if (row[0] === '' || row[0] === null) row[0] = 0;
-    });
-
-    sheet.getRange(2, exCol, rowCount, 1).setValues(exValues);
-    sheet.getRange(2, buyCol, rowCount, 1).setValues(buyValues);
+  if (!id) {
+    throw new Error('Storage is not initialized. Run setupStorage() first.');
   }
 
-  Logger.log('V5 schema ready.');
+  const ss = SpreadsheetApp.openById(id);
+  const sheet = ss.getSheetByName(SHEET_NAME);
+
+  if (!sheet) {
+    throw new Error('Metadata sheet is missing.');
+  }
+
+  if (sheet.getLastRow() === 0) {
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    sheet.setFrozenRows(1);
+    Logger.log('V5 schema created on empty sheet.');
+    return;
+  }
+
+  const currentHeaders = sheet
+    .getRange(1, 1, 1, sheet.getLastColumn())
+    .getValues()[0]
+    .map(v => String(v || '').trim());
+
+  if (currentHeaders.join('|') === HEADERS.join('|')) {
+    normalizeReservationColumns_(sheet);
+    Logger.log('Already V5. Reservation columns normalized.');
+    return;
+  }
+
+  const recognized = detectSchema_(currentHeaders);
+
+  if (!recognized) {
+    throw new Error(
+      '無法辨識目前 photos 工作表欄位。請確認第一列是否包含 seriesName/photoName、memberName、type、quantity 等既有欄位。'
+    );
+  }
+
+  migrateSheetToV5_(sheet, currentHeaders);
+  Logger.log('Migration complete: ' + recognized + ' -> V5');
 }
+
+function migrateSheetToV5_(sheet, oldHeaders) {
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    const oldLastRow = sheet.getLastRow();
+    const oldLastCol = sheet.getLastColumn();
+
+    const oldData = oldLastRow > 1
+      ? sheet.getRange(2, 1, oldLastRow - 1, oldLastCol).getValues()
+      : [];
+
+    backupRawSheetBeforeMigration_(oldHeaders, oldData);
+
+    const idx = {};
+    oldHeaders.forEach((header, i) => {
+      if (header) idx[header] = i;
+    });
+
+    const migratedRows = oldData
+      .filter(row => {
+        const idValue =
+          getOldValue_(row, idx, 'id') ||
+          getOldValue_(row, idx, 'seriesName') ||
+          getOldValue_(row, idx, 'photoName') ||
+          getOldValue_(row, idx, 'memberName');
+
+        return String(idValue || '').trim() !== '';
+      })
+      .map(row => {
+        const sellableRaw = getOldValue_(row, idx, 'sellable');
+        const normalizedSellable =
+          sellableRaw === true ||
+          String(sellableRaw).toLowerCase() === 'true';
+
+        const quantity = toNonNegativeInteger_(
+          getOldValue_(row, idx, 'quantity'),
+          0
+        );
+
+        const reservedExchange = toNonNegativeInteger_(
+          getOldValue_(row, idx, 'reservedExchange'),
+          0
+        );
+
+        const reservedPurchase = toNonNegativeInteger_(
+          getOldValue_(row, idx, 'reservedPurchase'),
+          0
+        );
+
+        let safeReservedExchange = reservedExchange;
+        let safeReservedPurchase = reservedPurchase;
+
+        if (safeReservedExchange + safeReservedPurchase > quantity) {
+          safeReservedExchange = 0;
+          safeReservedPurchase = 0;
+        }
+
+        const tradeStatus =
+          String(getOldValue_(row, idx, 'tradeStatus') || '').trim() ||
+          (normalizedSellable ? '可賣' : '非賣');
+
+        return [
+          String(getOldValue_(row, idx, 'id') || Utilities.getUuid()),
+          normalizeDateValue_(getOldValue_(row, idx, 'createdAt')),
+          normalizeDateValue_(getOldValue_(row, idx, 'updatedAt')),
+          String(
+            getOldValue_(row, idx, 'seriesName') ||
+            getOldValue_(row, idx, 'photoName') ||
+            ''
+          ).trim(),
+          String(getOldValue_(row, idx, 'memberName') || '').trim(),
+          String(getOldValue_(row, idx, 'type') || '').trim(),
+          String(getOldValue_(row, idx, 'type2') || '').trim(),
+          quantity,
+          ['非賣', '可換', '可賣', '求'].includes(tradeStatus)
+            ? tradeStatus
+            : '非賣',
+          Number(getOldValue_(row, idx, 'unitPrice') || 0),
+          String(getOldValue_(row, idx, 'imageFileId') || '').trim(),
+          String(getOldValue_(row, idx, 'imageUrl') || '').trim(),
+          safeReservedExchange,
+          safeReservedPurchase
+        ];
+      });
+
+    const backupValues = sheet
+      .getRange(1, 1, oldLastRow, oldLastCol)
+      .getValues();
+
+    try {
+      sheet.clearContents();
+      sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+
+      if (migratedRows.length > 0) {
+        sheet
+          .getRange(2, 1, migratedRows.length, HEADERS.length)
+          .setValues(migratedRows);
+      }
+
+      sheet.setFrozenRows(1);
+    } catch (err) {
+      sheet.clearContents();
+      sheet
+        .getRange(1, 1, backupValues.length, backupValues[0].length)
+        .setValues(backupValues);
+      throw err;
+    }
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function backupRawSheetBeforeMigration_(headers, rows) {
+  const props = PropertiesService.getScriptProperties();
+  const rootFolderId = props.getProperty('ROOT_FOLDER_ID');
+
+  if (!rootFolderId) {
+    throw new Error('ROOT_FOLDER_ID is missing.');
+  }
+
+  const root = DriveApp.getFolderById(rootFolderId);
+
+  let backupFolder;
+  const folders = root.getFoldersByName('backups');
+
+  if (folders.hasNext()) {
+    backupFolder = folders.next();
+  } else {
+    backupFolder = root.createFolder('backups');
+  }
+
+  const allRows = [headers].concat(rows);
+  const csv = '\uFEFF' + allRows
+    .map(row => row.map(csvEscape_).join(','))
+    .join('\r\n');
+
+  const stamp = Utilities.formatDate(
+    new Date(),
+    Session.getScriptTimeZone() || 'Asia/Taipei',
+    'yyyyMMdd_HHmmss'
+  );
+
+  backupFolder.createFile(
+    'V5升級前備份_' + stamp + '.csv',
+    csv,
+    MimeType.CSV
+  );
+}
+
+function normalizeReservationColumns_(sheet) {
+  if (sheet.getLastRow() <= 1) return;
+
+  const rowCount = sheet.getLastRow() - 1;
+  const exCol = HEADERS.indexOf('reservedExchange') + 1;
+  const buyCol = HEADERS.indexOf('reservedPurchase') + 1;
+
+  const exValues = sheet.getRange(2, exCol, rowCount, 1).getValues();
+  const buyValues = sheet.getRange(2, buyCol, rowCount, 1).getValues();
+
+  exValues.forEach(row => {
+    row[0] = toNonNegativeInteger_(row[0], 0);
+  });
+
+  buyValues.forEach(row => {
+    row[0] = toNonNegativeInteger_(row[0], 0);
+  });
+
+  sheet.getRange(2, exCol, rowCount, 1).setValues(exValues);
+  sheet.getRange(2, buyCol, rowCount, 1).setValues(buyValues);
+}
+
+function getOldValue_(row, idx, field) {
+  return idx[field] !== undefined ? row[idx[field]] : '';
+}
+
+function toNonNegativeInteger_(value, fallback) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 0) return fallback;
+  return n;
+}
+
+function normalizeDateValue_(value) {
+  if (!value) return new Date().toISOString();
+
+  if (Object.prototype.toString.call(value) === '[object Date]') {
+    return value.toISOString();
+  }
+
+  return String(value);
+}
+
 
 function listItems_() {
   const sheet = getSheet_();
@@ -561,6 +807,34 @@ function adjustQty_(id, quantity) {
 
   return rowToItem_(
     sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+  );
+}
+
+function updateType_(id, type) {
+  if (!id) throw new Error('Missing id.');
+
+  const allowed = ['全身', '半身', '大頭', '坐姿'];
+  if (!allowed.includes(String(type))) {
+    throw new Error('類型1不正確。');
+  }
+
+  const sheet = getSheet_();
+  const rowIndex = findRowById_(sheet, id);
+
+  if (!rowIndex) {
+    throw new Error('Record not found.');
+  }
+
+  const typeCol = HEADERS.indexOf('type') + 1;
+  const updatedAtCol = HEADERS.indexOf('updatedAt') + 1;
+
+  sheet.getRange(rowIndex, typeCol).setValue(String(type));
+  sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
+
+  return rowToItem_(
+    sheet
+      .getRange(rowIndex, 1, 1, HEADERS.length)
+      .getValues()[0]
   );
 }
 

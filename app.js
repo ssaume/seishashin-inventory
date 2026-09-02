@@ -288,6 +288,9 @@ function buildCard(record) {
     node.querySelector(".type2-chip").textContent = `類型2：${record.type2}`;
   }
 
+  const typeSelect = node.querySelector(".card-type-select");
+  if (typeSelect) typeSelect.value = record.type;
+
   const statusSelect = node.querySelector(".card-status-select");
   statusSelect.value = record.tradeStatus;
 
@@ -297,6 +300,20 @@ function buildCard(record) {
     qtyMinus.addEventListener("click", () => adjustQuantity(record, -1));
     qtyPlus.addEventListener("click", () => adjustQuantity(record, 1));
     qtyMinus.disabled = Number(record.quantity) <= reservedExchange + reservedPurchase;
+
+    if (typeSelect) {
+      typeSelect.addEventListener("change", async () => {
+        const oldType = record.type;
+        const nextType = typeSelect.value;
+        if (oldType === nextType) return;
+        try {
+          await updatePhotoType(record, nextType);
+        } catch (err) {
+          typeSelect.value = oldType;
+          showToast(`類型1更新失敗：${err.message}`);
+        }
+      });
+    }
 
     statusSelect.addEventListener("change", async () => {
       const oldStatus = record.tradeStatus;
@@ -386,6 +403,23 @@ async function adjustQuantity(record, delta) {
   } catch (err) {
     showToast(`更新失敗：${err.message}`);
   }
+}
+
+async function updatePhotoType(record, nextType) {
+  if (!["全身", "半身", "大頭", "坐姿"].includes(nextType)) {
+    throw new Error("類型1不正確");
+  }
+
+  if (isRemoteMode()) {
+    const data = await api("updateType", { id: record.id, type: nextType });
+    Object.assign(record, normalizeRecord(data.item));
+  } else {
+    record.type = nextType;
+    saveDemoRecords();
+  }
+
+  render();
+  showToast("類型1已更新");
 }
 
 async function updateTradeStatus(record, nextStatus) {
