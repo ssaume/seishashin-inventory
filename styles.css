@@ -383,3 +383,65 @@ body:not(.share-mode) .share-only {
 body.share-mode .price-editor {
   display: none !important;
 }
+
+
+/* V5.6 reservation names */
+.reservation-entry-box {
+  padding: 5px 0 10px;
+}
+.reservation-input-row {
+  display: flex;
+  gap: 7px;
+}
+.reservation-input-row input {
+  flex: 1;
+  min-width: 0;
+  padding: 8px 9px;
+  font-size: .78rem;
+}
+.reservation-input-row button {
+  flex: 0 0 auto;
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--accent-deep);
+  border-radius: 8px;
+  padding: 8px 10px;
+  font-size: .76rem;
+}
+.reservation-input-row button:disabled {
+  opacity: .4;
+  cursor: not-allowed;
+}
+.reservation-name-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 7px;
+}
+.reservation-name-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  border: 1px solid #d5eaf5;
+  background: #f5fbff;
+  color: #496b80;
+  border-radius: 999px;
+  padding: 5px 8px;
+  font-size: .72rem;
+}
+.reservation-name-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 150px;
+}
+.reservation-name-chip button {
+  border: 0;
+  background: transparent;
+  color: #a45c66;
+  padding: 0;
+  width: 18px;
+  height: 18px;
+  font-size: .75rem;
+}

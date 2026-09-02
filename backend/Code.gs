@@ -1,5 +1,5 @@
 /**
- * 生寫真收藏庫 V5.5 - Google Apps Script backend
+ * 生寫真收藏庫 V5.6 - Google Apps Script backend
  *
  * 圖片：Google Drive / images
  * 屬性：Google Sheet
@@ -25,7 +25,8 @@ const HEADERS = [
   'type', 'type2',
   'quantity', 'tradeStatus', 'unitPrice',
   'imageFileId', 'imageUrl',
-  'reservedExchange', 'reservedPurchase'
+  'reservedExchange', 'reservedPurchase',
+  'reservedExchangeNames', 'reservedPurchaseNames'
 ];
 const LIST_CACHE_KEY = 'photos_list_v5_3';
 const LIST_CACHE_SECONDS = 120;
@@ -36,7 +37,8 @@ const CSV_HEADERS = [
   '類型1', '類型2',
   '數量', '狀態', '單價',
   '圖片File ID', '圖片URL',
-  '預約交換', '預約購買'
+  '預約交換', '預約購買',
+  '交換預約紀錄', '購買預約紀錄'
 ];
 
 function setupStorage() {
@@ -227,6 +229,12 @@ function doPost(e) {
 
       case 'updateStatus':
         return json_({ ok: true, item: updateStatus_(req.id, req.tradeStatus) });
+
+      case 'addReservation':
+        return json_({ ok: true, item: addReservation_(req.id, req.reservationType, req.note) });
+
+      case 'removeReservation':
+        return json_({ ok: true, item: removeReservation_(req.id, req.reservationType, req.index) });
 
       case 'adjustReservation':
         return json_({ ok: true, item: adjustReservation_(req.id, req.reservationType, req.delta) });
@@ -498,7 +506,15 @@ function migrateSheetToV5_(sheet, oldHeaders) {
           String(getOldValue_(row, idx, 'imageFileId') || '').trim(),
           String(getOldValue_(row, idx, 'imageUrl') || '').trim(),
           safeReservedExchange,
-          safeReservedPurchase
+          safeReservedPurchase,
+          JSON.stringify(
+            parseReservationNames_(getOldValue_(row, idx, 'reservedExchangeNames'),
+              safeReservedExchange, '未記名交換預約')
+          ),
+          JSON.stringify(
+            parseReservationNames_(getOldValue_(row, idx, 'reservedPurchaseNames'),
+              safeReservedPurchase, '未記名購買預約')
+          )
         ];
       });
 
@@ -679,7 +695,13 @@ function replaceAllItems_(items) {
       imageFileId: String(item.imageFileId || '').trim(),
       imageUrl: String(item.imageUrl || '').trim(),
       reservedExchange: Number(item.reservedExchange || 0),
-      reservedPurchase: Number(item.reservedPurchase || 0)
+      reservedPurchase: Number(item.reservedPurchase || 0),
+      reservedExchangeNames: JSON.stringify(
+        parseReservationNames_(item.reservedExchangeNames, Number(item.reservedExchange || 0), '未記名交換預約')
+      ),
+      reservedPurchaseNames: JSON.stringify(
+        parseReservationNames_(item.reservedPurchaseNames, Number(item.reservedPurchase || 0), '未記名購買預約')
+      )
     };
     try {
       validateItem_(candidate);
@@ -862,7 +884,9 @@ function createItem_(item, image) {
     imageFileId: file.getId(),
     imageUrl: `https://drive.google.com/thumbnail?id=${file.getId()}&sz=w1200`,
     reservedExchange: 0,
-    reservedPurchase: 0
+    reservedPurchase: 0,
+    reservedExchangeNames: '[]',
+    reservedPurchaseNames: '[]'
   };
 
   getSheet_().appendRow(itemToRow_(created));
@@ -986,6 +1010,146 @@ function updateStatus_(id, tradeStatus) {
 
   return rowToItem_(
     sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+  );
+}
+
+function addReservation_(id, reservationType, note) {
+  if (!id) throw new Error('Missing id.');
+
+  const text = String(note || '').trim();
+  if (!text) throw new Error('預約者或備註不可空白。');
+  if (text.length > 80) throw new Error('預約文字不可超過 80 字。');
+
+  const namesField = reservationType === 'exchange'
+    ? 'reservedExchangeNames'
+    : reservationType === 'purchase'
+      ? 'reservedPurchaseNames'
+      : '';
+
+  const countField = reservationType === 'exchange'
+    ? 'reservedExchange'
+    : reservationType === 'purchase'
+      ? 'reservedPurchase'
+      : '';
+
+  if (!namesField) throw new Error('Reservation type must be exchange or purchase.');
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    const sheet = getSheet_();
+    const rowIndex = findRowById_(sheet, id);
+    if (!rowIndex) throw new Error('Record not found.');
+
+    const item = rowToItem_(
+      sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+    );
+
+    const available = Number(item.quantity || 0)
+      - Number(item.reservedExchange || 0)
+      - Number(item.reservedPurchase || 0);
+
+    if (available <= 0) throw new Error('目前沒有可用庫存可新增預約。');
+
+    const names = parseReservationNames_(item[namesField], Number(item[countField] || 0), '未記名預約');
+    names.push(text);
+
+    const namesCol = HEADERS.indexOf(namesField) + 1;
+    const countCol = HEADERS.indexOf(countField) + 1;
+    const updatedAtCol = HEADERS.indexOf('updatedAt') + 1;
+
+    sheet.getRange(rowIndex, namesCol).setValue(JSON.stringify(names));
+    sheet.getRange(rowIndex, countCol).setValue(names.length);
+    sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
+
+    invalidateListCache_();
+
+    return rowToItem_(
+      sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+    );
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function removeReservation_(id, reservationType, index) {
+  if (!id) throw new Error('Missing id.');
+
+  const namesField = reservationType === 'exchange'
+    ? 'reservedExchangeNames'
+    : reservationType === 'purchase'
+      ? 'reservedPurchaseNames'
+      : '';
+
+  const countField = reservationType === 'exchange'
+    ? 'reservedExchange'
+    : reservationType === 'purchase'
+      ? 'reservedPurchase'
+      : '';
+
+  if (!namesField) throw new Error('Reservation type must be exchange or purchase.');
+
+  const removeIndex = Number(index);
+  if (!Number.isInteger(removeIndex) || removeIndex < 0) {
+    throw new Error('預約索引不正確。');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    const sheet = getSheet_();
+    const rowIndex = findRowById_(sheet, id);
+    if (!rowIndex) throw new Error('Record not found.');
+
+    const item = rowToItem_(
+      sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+    );
+
+    const names = parseReservationNames_(item[namesField], Number(item[countField] || 0), '未記名預約');
+    if (removeIndex >= names.length) throw new Error('找不到指定預約紀錄。');
+
+    names.splice(removeIndex, 1);
+
+    const namesCol = HEADERS.indexOf(namesField) + 1;
+    const countCol = HEADERS.indexOf(countField) + 1;
+    const updatedAtCol = HEADERS.indexOf('updatedAt') + 1;
+
+    sheet.getRange(rowIndex, namesCol).setValue(JSON.stringify(names));
+    sheet.getRange(rowIndex, countCol).setValue(names.length);
+    sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
+
+    invalidateListCache_();
+
+    return rowToItem_(
+      sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+    );
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+function parseReservationNames_(value, legacyCount, legacyLabel) {
+  if (Array.isArray(value)) {
+    return value.map(v => String(v).trim()).filter(Boolean);
+  }
+
+  const text = String(value || '').trim();
+  if (text) {
+    try {
+      const parsed = JSON.parse(text);
+      if (Array.isArray(parsed)) {
+        return parsed.map(v => String(v).trim()).filter(Boolean);
+      }
+    } catch (err) {
+      return text.split(';').map(v => v.trim()).filter(Boolean);
+    }
+  }
+
+  const count = Math.max(0, Number(legacyCount || 0));
+  return Array.from({ length: count }, (_, i) =>
+    count === 1 ? legacyLabel : legacyLabel + ' ' + (i + 1)
   );
 }
 
@@ -1140,8 +1304,14 @@ function rowToItem_(row) {
   obj.unitPrice = Number(obj.unitPrice || 0);
   obj.type2 = String(obj.type2 || '');
   obj.tradeStatus = String(obj.tradeStatus || '非賣');
-  obj.reservedExchange = Math.max(0, Number(obj.reservedExchange || 0));
-  obj.reservedPurchase = Math.max(0, Number(obj.reservedPurchase || 0));
+  obj.reservedExchangeNames = parseReservationNames_(
+    obj.reservedExchangeNames, Number(obj.reservedExchange || 0), '未記名交換預約'
+  );
+  obj.reservedPurchaseNames = parseReservationNames_(
+    obj.reservedPurchaseNames, Number(obj.reservedPurchase || 0), '未記名購買預約'
+  );
+  obj.reservedExchange = obj.reservedExchangeNames.length;
+  obj.reservedPurchase = obj.reservedPurchaseNames.length;
   obj.availableQuantity = Math.max(
     0,
     obj.quantity - obj.reservedExchange - obj.reservedPurchase
@@ -1151,7 +1321,12 @@ function rowToItem_(row) {
 }
 
 function itemToRow_(obj) {
-  return HEADERS.map(h => obj[h] ?? '');
+  return HEADERS.map(h => {
+    if (h === 'reservedExchangeNames' || h === 'reservedPurchaseNames') {
+      return JSON.stringify(parseReservationNames_(obj[h], 0, ''));
+    }
+    return obj[h] ?? '';
+  });
 }
 
 function sanitizeFilename_(name) {

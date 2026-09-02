@@ -169,3 +169,35 @@ Apps Script 更新後需重新 Deploy New version。
 - backend/Code.gs
 
 Apps Script 更新後重新 Deploy New version。
+
+
+## V5.6 — 預約交換／購買加入姓名或備註
+
+管理端的預約不再只用 +/- 計數。
+
+交換與購買各自有：
+- 文字輸入欄
+- 新增按鈕
+- 已登錄名單
+- 每筆獨立刪除
+
+例如：
+交換預約：田中、朋友A
+購買預約：佐藤、X帳號 @xxxx
+
+數量規則：
+- 預約交換 = 交換預約紀錄筆數
+- 預約購買 = 購買預約紀錄筆數
+- 可用數量 = 在庫 - 交換預約 - 購買預約
+
+分享模式只回傳預約「數量」，不回傳 `reservedExchangeNames` / `reservedPurchaseNames`，所以其他人無法看到姓名或備註。
+
+### 舊資料
+若 V5.5 之前已存在只有數量、沒有姓名的預約，升級後會自動建立「未記名交換預約 / 未記名購買預約」來保留原預約數量。
+
+### 升級
+本版增加兩個 Sheet 欄位：
+- reservedExchangeNames
+- reservedPurchaseNames
+
+更新 `Code.gs` 後，執行一次 `migrateToV5()` 即可自動備份並升級，再重新 Deploy New version。

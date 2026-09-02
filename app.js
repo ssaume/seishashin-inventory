@@ -1,6 +1,6 @@
 const STORAGE_KEY = "seishashin-inventory-demo-v2";
 const SETTINGS_KEY = "seishashin-inventory-settings-v1";
-const REMOTE_VIEW_CACHE_KEY = "seishashin-inventory-remote-view-v5.5";
+const REMOTE_VIEW_CACHE_KEY = "seishashin-inventory-remote-view-v5.6";
 const PAGE_PARAMS = new URLSearchParams(window.location.search);
 const SHARE_TOKEN = PAGE_PARAMS.get("share") || "";
 const SHARE_API_URL = PAGE_PARAMS.get("api") || "";
@@ -19,7 +19,9 @@ const CSV_COLUMNS = [
   ["imageFileId", "圖片File ID"],
   ["imageUrl", "圖片URL"],
   ["reservedExchange", "預約交換"],
-  ["reservedPurchase", "預約購買"]
+  ["reservedPurchase", "預約購買"],
+  ["reservedExchangeNames", "交換預約紀錄"],
+  ["reservedPurchaseNames", "購買預約紀錄"]
 ];
 const PLACEHOLDER = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="600" height="800">
@@ -97,9 +99,26 @@ function normalizeRecord(r) {
     type2: r.type2 || "",
     tradeStatus: r.tradeStatus || (r.sellable === true ? "可賣" : "非賣"),
     reservedExchange: Math.max(0, Number(r.reservedExchange || 0)),
-    reservedPurchase: Math.max(0, Number(r.reservedPurchase || 0))
+    reservedPurchase: Math.max(0, Number(r.reservedPurchase || 0)),
+    reservedExchangeNames: normalizeReservationNames(r.reservedExchangeNames),
+    reservedPurchaseNames: normalizeReservationNames(r.reservedPurchaseNames)
   };
 }
+function normalizeReservationNames(value) {
+  if (Array.isArray(value)) return value.map(v => String(v)).filter(Boolean);
+  if (!value) return [];
+  if (typeof value === "string") {
+    const s = value.trim();
+    if (!s) return [];
+    try {
+      const parsed = JSON.parse(s);
+      if (Array.isArray(parsed)) return parsed.map(v => String(v)).filter(Boolean);
+    } catch {}
+    return s.split(";").map(v => v.trim()).filter(Boolean);
+  }
+  return [];
+}
+
 function getDemoRecords() {
   try {
     const saved = JSON.parse(localStorage.getItem(STORAGE_KEY));
@@ -367,6 +386,11 @@ function buildCard(record) {
   node.querySelector(".exchange-label").textContent = reservedExchange > 0 ? "已有交換預約" : "尚無交換預約";
   node.querySelector(".purchase-label").textContent = reservedPurchase > 0 ? "已有購買預約" : "尚無購買預約";
 
+  const exchangeNames = normalizeReservationNames(record.reservedExchangeNames);
+  const purchaseNames = normalizeReservationNames(record.reservedPurchaseNames);
+  renderReservationNames(node.querySelector(".exchange-name-list"), exchangeNames, record, "exchange");
+  renderReservationNames(node.querySelector(".purchase-name-list"), purchaseNames, record, "purchase");
+
   const stockBadge = node.querySelector(".stock-state-badge");
   stockBadge.textContent = available > 0 ? `尚有庫存 ${available}` : "目前無可用庫存";
   stockBadge.classList.add(available > 0 ? "in-stock" : "out-of-stock");
@@ -420,20 +444,29 @@ function buildCard(record) {
       }
     });
 
-    const exMinus = node.querySelector(".reserve-exchange-minus");
-    const exPlus = node.querySelector(".reserve-exchange-plus");
-    const buyMinus = node.querySelector(".reserve-purchase-minus");
-    const buyPlus = node.querySelector(".reserve-purchase-plus");
+    const exchangeInput = node.querySelector(".exchange-name-input");
+    const purchaseInput = node.querySelector(".purchase-name-input");
+    const addExchangeBtn = node.querySelector(".add-exchange-btn");
+    const addPurchaseBtn = node.querySelector(".add-purchase-btn");
 
-    exMinus.disabled = reservedExchange <= 0;
-    buyMinus.disabled = reservedPurchase <= 0;
-    exPlus.disabled = available <= 0;
-    buyPlus.disabled = available <= 0;
+    addExchangeBtn.disabled = available <= 0;
+    addPurchaseBtn.disabled = available <= 0;
 
-    exMinus.addEventListener("click", () => adjustReservation(record, "exchange", -1));
-    exPlus.addEventListener("click", () => adjustReservation(record, "exchange", 1));
-    buyMinus.addEventListener("click", () => adjustReservation(record, "purchase", -1));
-    buyPlus.addEventListener("click", () => adjustReservation(record, "purchase", 1));
+    addExchangeBtn.addEventListener("click", () => addReservationName(record, "exchange", exchangeInput));
+    addPurchaseBtn.addEventListener("click", () => addReservationName(record, "purchase", purchaseInput));
+
+    exchangeInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addReservationName(record, "exchange", exchangeInput);
+      }
+    });
+    purchaseInput.addEventListener("keydown", e => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        addReservationName(record, "purchase", purchaseInput);
+      }
+    });
 
     if (savePriceBtn && priceInput) {
       savePriceBtn.addEventListener("click", async () => {
@@ -591,39 +624,95 @@ async function updateTradeStatus(record, nextStatus) {
   showToast("狀態已更新");
 }
 
-async function adjustReservation(record, reservationType, delta) {
-  const field = reservationType === "exchange" ? "reservedExchange" : "reservedPurchase";
-  const label = reservationType === "exchange" ? "交換" : "購買";
+function renderReservationNames(container, names, record, reservationType) {
+  if (!container) return;
+  container.innerHTML = "";
 
-  const current = Number(record[field] || 0);
-  const next = current + delta;
-  const reservedTotal = Number(record.reservedExchange || 0) + Number(record.reservedPurchase || 0);
-  const available = Number(record.quantity || 0) - reservedTotal;
+  names.forEach((name, index) => {
+    const chip = document.createElement("span");
+    chip.className = "reservation-name-chip";
 
-  if (next < 0) return;
-  if (delta > 0 && available <= 0) {
+    const text = document.createElement("span");
+    text.textContent = name;
+    chip.appendChild(text);
+
+    if (!IS_SHARE_MODE) {
+      const remove = document.createElement("button");
+      remove.type = "button";
+      remove.textContent = "×";
+      remove.setAttribute("aria-label", `刪除 ${name}`);
+      remove.addEventListener("click", () => removeReservationName(record, reservationType, index));
+      chip.appendChild(remove);
+    }
+
+    container.appendChild(chip);
+  });
+}
+
+async function addReservationName(record, reservationType, inputEl) {
+  const note = String(inputEl?.value || "").trim();
+  if (!note) return showToast("請輸入預約者或備註");
+
+  const reservedTotal =
+    Number(record.reservedExchange || 0) +
+    Number(record.reservedPurchase || 0);
+
+  if (reservedTotal >= Number(record.quantity || 0)) {
     return showToast("目前沒有可用庫存可新增預約");
   }
 
   try {
     if (isRemoteMode()) {
-      const data = await api("adjustReservation", {
+      const data = await api("addReservation", {
         id: record.id,
         reservationType,
-        delta
+        note
       });
       Object.assign(record, normalizeRecord(data.item));
     } else {
-      record[field] = next;
+      const field = reservationType === "exchange" ? "reservedExchangeNames" : "reservedPurchaseNames";
+      record[field] = [...normalizeReservationNames(record[field]), note];
+      record.reservedExchange = normalizeReservationNames(record.reservedExchangeNames).length;
+      record.reservedPurchase = normalizeReservationNames(record.reservedPurchaseNames).length;
       saveDemoRecords();
     }
+
+    if (inputEl) inputEl.value = "";
     persistCurrentRemoteView();
     render();
-    showToast(delta > 0 ? `已新增 1 筆${label}預約` : `已取消 1 筆${label}預約`);
+    showToast("已新增預約紀錄");
   } catch (err) {
-    showToast(`預約更新失敗：${err.message}`);
+    showToast(`預約新增失敗：${err.message}`, 6000);
   }
 }
+
+async function removeReservationName(record, reservationType, index) {
+  try {
+    if (isRemoteMode()) {
+      const data = await api("removeReservation", {
+        id: record.id,
+        reservationType,
+        index
+      });
+      Object.assign(record, normalizeRecord(data.item));
+    } else {
+      const field = reservationType === "exchange" ? "reservedExchangeNames" : "reservedPurchaseNames";
+      const list = normalizeReservationNames(record[field]);
+      list.splice(index, 1);
+      record[field] = list;
+      record.reservedExchange = normalizeReservationNames(record.reservedExchangeNames).length;
+      record.reservedPurchase = normalizeReservationNames(record.reservedPurchaseNames).length;
+      saveDemoRecords();
+    }
+
+    persistCurrentRemoteView();
+    render();
+    showToast("已刪除預約紀錄");
+  } catch (err) {
+    showToast(`預約刪除失敗：${err.message}`, 6000);
+  }
+}
+
 async function deleteRecord(record) {
   if (!confirm(`確定刪除「${record.memberName}／${record.seriesName}／${record.type}」？`)) return;
   try {
@@ -710,6 +799,8 @@ function csvRowsToRecords(rows) {
     item.unitPrice = item.unitPrice === "" ? 0 : Number(item.unitPrice);
     item.reservedExchange = item.reservedExchange === "" ? 0 : Number(item.reservedExchange);
     item.reservedPurchase = item.reservedPurchase === "" ? 0 : Number(item.reservedPurchase);
+    item.reservedExchangeNames = normalizeReservationNames(item.reservedExchangeNames);
+    item.reservedPurchaseNames = normalizeReservationNames(item.reservedPurchaseNames);
     if (!item.seriesName) throw new Error(`第 ${r + 1} 列：生寫真系列不可空白`);
     if (!item.memberName) throw new Error(`第 ${r + 1} 列：成員名不可空白`);
     if (!["全身", "半身", "大頭", "坐姿"].includes(item.type)) throw new Error(`第 ${r + 1} 列：類型1必須為全身、半身、大頭或坐姿`);
