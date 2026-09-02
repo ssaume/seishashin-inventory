@@ -351,3 +351,35 @@ body.share-mode .status-edit-row {
 body.share-mode .reservation-row small {
   display: none;
 }
+
+
+/* V5.5: editable price */
+.price-editor {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.card-price-input {
+  width: 88px;
+  padding: 7px 9px;
+  text-align: right;
+  font-size: .82rem;
+}
+.save-price-btn {
+  border: 1px solid var(--line);
+  background: #fff;
+  color: var(--accent-deep);
+  border-radius: 8px;
+  padding: 7px 9px;
+  font-size: .76rem;
+}
+.save-price-btn:disabled {
+  opacity: .45;
+  cursor: not-allowed;
+}
+body:not(.share-mode) .share-only {
+  display: none !important;
+}
+body.share-mode .price-editor {
+  display: none !important;
+}

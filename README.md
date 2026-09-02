@@ -122,3 +122,50 @@ V5.3 已移除所有殘留呼叫。Schema 驗證統一由 V5.1 的 `getSheet_()`
 
 Apps Script 更新後必須重新發布：
 Deploy → Manage deployments → Edit → New version → Deploy
+
+
+## V5.4 — 手機圖片新增穩定性與速度
+
+### 圖片處理
+- 最長邊由 1600px 改為 1200px
+- JPEG 品質由 0.82 改為 0.72
+- 改用非同步 `canvas.toBlob()`，降低 iPhone Safari 的記憶體峰值
+- 如果壓縮後仍超過約 900KB，會再壓縮一次
+
+### 上傳穩定性
+- create API 最長等待 60 秒
+- 第一次連線失敗時會用同一 `uploadToken` 自動重試一次
+- Apps Script 以 `uploadToken` 做 10 分鐘冪等處理
+- 即使第一次其實已成功寫入、但手機沒收到回應，第二次重試也不會重複新增
+- 前端只有取得後端回傳的 `item.id` 與 `imageUrl` 才會顯示「已新增生寫真」
+- 失敗提示延長顯示時間
+
+### 升級
+資料表 schema 沒有改，不需要 migration。
+
+需更新：
+- app.js
+- backend/Code.gs
+
+Apps Script 更新後需重新 Deploy New version。
+
+
+## V5.5 — 已上傳生寫真可修改價格
+
+管理端每張已新增卡片的「單價」改為可編輯數字欄位。
+
+- 輸入新價格
+- 按「儲存」
+- 即時寫回 Google Sheet
+- 分享檢視會同步顯示更新後價格
+- 分享檢視仍然不可修改
+
+資料表 schema 沒有變，不需要 migration。
+
+更新：
+- index.html
+- styles.css
+- app.js
+- backend/Code.gs
+
+Apps Script 更新後重新 Deploy New version。

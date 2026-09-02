@@ -1,6 +1,6 @@
 const STORAGE_KEY = "seishashin-inventory-demo-v2";
 const SETTINGS_KEY = "seishashin-inventory-settings-v1";
-const REMOTE_VIEW_CACHE_KEY = "seishashin-inventory-remote-view-v5.3";
+const REMOTE_VIEW_CACHE_KEY = "seishashin-inventory-remote-view-v5.5";
 const PAGE_PARAMS = new URLSearchParams(window.location.search);
 const SHARE_TOKEN = PAGE_PARAMS.get("share") || "";
 const SHARE_API_URL = PAGE_PARAMS.get("api") || "";
@@ -117,19 +117,44 @@ function getDemoRecords() {
 function saveDemoRecords() {
   localStorage.setItem(STORAGE_KEY, JSON.stringify(records));
 }
-async function api(action, payload = {}) {
+async function api(action, payload = {}, options = {}) {
   const { apiUrl, apiSecret } = getSettings();
   if (!apiUrl || !apiSecret) throw new Error("尚未設定後端");
-  const res = await fetch(apiUrl, {
-    method: "POST",
-    redirect: "follow",
-    headers: { "Content-Type": "text/plain;charset=utf-8" },
-    body: JSON.stringify({ action, secret: apiSecret, ...payload })
-  });
-  if (!res.ok) throw new Error(`API HTTP ${res.status}`);
-  const data = await res.json();
-  if (!data.ok) throw new Error(data.error || "API 發生錯誤");
-  return data;
+
+  const timeoutMs = Number(options.timeoutMs || 30000);
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+
+  try {
+    const res = await fetch(apiUrl, {
+      method: "POST",
+      redirect: "follow",
+      headers: { "Content-Type": "text/plain;charset=utf-8" },
+      body: JSON.stringify({ action, secret: apiSecret, ...payload }),
+      signal: controller.signal
+    });
+
+    if (!res.ok) throw new Error(`API HTTP ${res.status}`);
+
+    const text = await res.text();
+    let data;
+
+    try {
+      data = JSON.parse(text);
+    } catch {
+      throw new Error("後端回應格式不正確");
+    }
+
+    if (!data.ok) throw new Error(data.error || "API 發生錯誤");
+    return data;
+  } catch (err) {
+    if (err?.name === "AbortError") {
+      throw new Error(`連線逾時（${Math.round(timeoutMs / 1000)} 秒）`);
+    }
+    throw err;
+  } finally {
+    clearTimeout(timer);
+  }
 }
 async function publicApi(action, payload = {}) {
   if (!SHARE_API_URL || !SHARE_TOKEN) throw new Error("分享連結資訊不完整");
@@ -328,6 +353,10 @@ function buildCard(record) {
   node.querySelector(".card-qty").textContent = record.quantity;
   node.querySelector(".card-price").textContent = Number(record.unitPrice || 0).toLocaleString();
 
+  const priceInput = node.querySelector(".card-price-input");
+  const savePriceBtn = node.querySelector(".save-price-btn");
+  if (priceInput) priceInput.value = Number(record.unitPrice || 0);
+
   const reservedExchange = Number(record.reservedExchange || 0);
   const reservedPurchase = Number(record.reservedPurchase || 0);
   const available = Math.max(0, Number(record.quantity || 0) - reservedExchange - reservedPurchase);
@@ -405,6 +434,35 @@ function buildCard(record) {
     exPlus.addEventListener("click", () => adjustReservation(record, "exchange", 1));
     buyMinus.addEventListener("click", () => adjustReservation(record, "purchase", -1));
     buyPlus.addEventListener("click", () => adjustReservation(record, "purchase", 1));
+
+    if (savePriceBtn && priceInput) {
+      savePriceBtn.addEventListener("click", async () => {
+        const nextPrice = Number(priceInput.value);
+        const oldPrice = Number(record.unitPrice || 0);
+
+        if (!Number.isFinite(nextPrice) || nextPrice < 0) {
+          priceInput.value = oldPrice;
+          return showToast("單價不可小於 0");
+        }
+
+        if (nextPrice === oldPrice) {
+          return showToast("單價沒有變更");
+        }
+
+        savePriceBtn.disabled = true;
+        savePriceBtn.textContent = "更新中…";
+
+        try {
+          await updatePrice(record, nextPrice);
+        } catch (err) {
+          priceInput.value = oldPrice;
+          showToast(`單價更新失敗：${err.message}`, 6000);
+        } finally {
+          savePriceBtn.disabled = false;
+          savePriceBtn.textContent = "儲存";
+        }
+      });
+    }
 
     node.querySelector(".delete-btn").addEventListener("click", () => deleteRecord(record));
   }
@@ -492,6 +550,28 @@ async function updatePhotoType(record, nextType) {
   persistCurrentRemoteView();
   render();
   showToast("類型1已更新");
+}
+
+async function updatePrice(record, nextPrice) {
+  if (!Number.isFinite(nextPrice) || nextPrice < 0) {
+    throw new Error("單價不可小於 0");
+  }
+
+  if (isRemoteMode()) {
+    const data = await api("updatePrice", {
+      id: record.id,
+      unitPrice: nextPrice
+    });
+
+    Object.assign(record, normalizeRecord(data.item));
+  } else {
+    record.unitPrice = nextPrice;
+    saveDemoRecords();
+  }
+
+  persistCurrentRemoteView();
+  render();
+  showToast("單價已更新");
 }
 
 async function updateTradeStatus(record, nextStatus) {
@@ -797,12 +877,20 @@ els.imageInput.addEventListener("change", async () => {
   if (!file) return;
   if (!file.type.startsWith("image/")) return showToast("請選擇圖片檔");
   try {
-    selectedImage = await compressImage(file, 1600, 0.82);
-    els.imagePreview.src = selectedImage.dataUrl;
+    els.imagePickerBtn.disabled = true;
+    const originalText = els.uploadPlaceholder.innerHTML;
+    els.uploadPlaceholder.innerHTML = "<b>圖片處理中…</b><small>正在為手機上傳最佳化</small>";
+
+    selectedImage = await compressImage(file, 1200, 0.72);
+
+    els.imagePreview.src = selectedImage.previewUrl;
     els.imagePreview.classList.remove("hidden");
     els.uploadPlaceholder.classList.add("hidden");
+    els.uploadPlaceholder.innerHTML = originalText;
   } catch (err) {
-    showToast(`圖片處理失敗：${err.message}`);
+    showToast(`圖片處理失敗：${err.message}`, 6000);
+  } finally {
+    els.imagePickerBtn.disabled = false;
   }
 });
 
@@ -826,14 +914,31 @@ els.entryForm.addEventListener("submit", async e => {
 
   try {
     if (isRemoteMode()) {
-      const data = await api("create", {
+      const uploadToken = crypto.randomUUID();
+      const createPayload = {
+        uploadToken,
         item,
         image: {
           base64: selectedImage.base64,
           mimeType: "image/jpeg",
           filename: buildFilename(item)
         }
-      });
+      };
+
+      let data;
+      try {
+        data = await api("create", createPayload, { timeoutMs: 60000 });
+      } catch (firstError) {
+        els.saveEntryBtn.textContent = "重新確認中…";
+        // 同一 uploadToken 重試；後端具冪等性，不會重複新增。
+        await new Promise(resolve => setTimeout(resolve, 1200));
+        data = await api("create", createPayload, { timeoutMs: 60000 });
+      }
+
+      if (!data?.item?.id || !data?.item?.imageUrl) {
+        throw new Error("後端未確認圖片與資料已寫入");
+      }
+
       records.unshift(normalizeRecord(data.item));
     } else {
       records.unshift({
@@ -854,7 +959,7 @@ els.entryForm.addEventListener("submit", async e => {
     render();
     showToast("已新增生寫真");
   } catch (err) {
-    showToast(`儲存失敗：${err.message}`);
+    showToast(`儲存失敗：${err.message}`, 7000);
   } finally {
     els.saveEntryBtn.disabled = false;
     els.saveEntryBtn.textContent = "儲存";
@@ -916,19 +1021,77 @@ els.clearSettingsBtn.addEventListener("click", async () => {
 
 function setConnectionText(text) { els.connectionState.textContent = text; }
 
-async function compressImage(file, maxSide = 1600, quality = 0.82) {
-  const dataUrl = await fileToDataURL(file);
-  const img = await loadImage(dataUrl);
-  const scale = Math.min(1, maxSide / Math.max(img.naturalWidth, img.naturalHeight));
-  const width = Math.round(img.naturalWidth * scale);
-  const height = Math.round(img.naturalHeight * scale);
-  const canvas = document.createElement("canvas");
-  canvas.width = width;
-  canvas.height = height;
-  canvas.getContext("2d").drawImage(img, 0, 0, width, height);
-  const jpeg = canvas.toDataURL("image/jpeg", quality);
-  return { dataUrl: jpeg, base64: jpeg.split(",")[1] };
+async function compressImage(file, maxSide = 1200, quality = 0.72) {
+  const objectUrl = URL.createObjectURL(file);
+
+  try {
+    const img = await loadImage(objectUrl);
+    const scale = Math.min(
+      1,
+      maxSide / Math.max(img.naturalWidth, img.naturalHeight)
+    );
+
+    const width = Math.max(1, Math.round(img.naturalWidth * scale));
+    const height = Math.max(1, Math.round(img.naturalHeight * scale));
+
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+
+    const ctx = canvas.getContext("2d", { alpha: false });
+    ctx.drawImage(img, 0, 0, width, height);
+
+    const blob = await canvasToBlob(canvas, "image/jpeg", quality);
+
+    // 避免極端手機照片產生過大的 Apps Script request。
+    const finalBlob = blob.size > 900 * 1024
+      ? await recompressBlob(blob, width, height, 0.62)
+      : blob;
+
+    const dataUrl = await blobToDataURL(finalBlob);
+
+    return {
+      previewUrl: dataUrl,
+      base64: dataUrl.split(",")[1],
+      byteSize: finalBlob.size
+    };
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
 }
+
+function canvasToBlob(canvas, mimeType, quality) {
+  return new Promise((resolve, reject) => {
+    canvas.toBlob(blob => {
+      if (!blob) return reject(new Error("無法壓縮圖片"));
+      resolve(blob);
+    }, mimeType, quality);
+  });
+}
+
+async function recompressBlob(blob, width, height, quality) {
+  const url = URL.createObjectURL(blob);
+  try {
+    const img = await loadImage(url);
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    canvas.getContext("2d", { alpha: false }).drawImage(img, 0, 0, width, height);
+    return await canvasToBlob(canvas, "image/jpeg", quality);
+  } finally {
+    URL.revokeObjectURL(url);
+  }
+}
+
+function blobToDataURL(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error("無法讀取壓縮後圖片"));
+    reader.readAsDataURL(blob);
+  });
+}
+
 function fileToDataURL(file) {
   return new Promise((resolve,reject) => {
     const reader = new FileReader();
@@ -955,11 +1118,11 @@ function escapeHtml(value) {
   }[ch]));
 }
 let toastTimer;
-function showToast(message) {
+function showToast(message, duration = 3000) {
   els.toast.textContent = message;
   els.toast.classList.add("show");
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => els.toast.classList.remove("show"), 2600);
+  toastTimer = setTimeout(() => els.toast.classList.remove("show"), duration);
 }
 
 applyShareModeUI();

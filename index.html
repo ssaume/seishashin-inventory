@@ -224,9 +224,13 @@
           <strong class="card-available"></strong>
         </div>
 
-        <div class="meta-row">
+        <div class="meta-row price-row">
           <span>單價</span>
-          <strong class="card-price"></strong>
+          <strong class="card-price share-only"></strong>
+          <div class="admin-only price-editor">
+            <input class="card-price-input" type="number" min="0" step="1" inputmode="numeric" />
+            <button class="save-price-btn" type="button">儲存</button>
+          </div>
         </div>
 
         <div class="admin-only status-edit-row">

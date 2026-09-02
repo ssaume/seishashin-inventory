@@ -1,5 +1,5 @@
 /**
- * 生寫真收藏庫 V5.2 - Google Apps Script backend
+ * 生寫真收藏庫 V5.5 - Google Apps Script backend
  *
  * 圖片：Google Drive / images
  * 屬性：Google Sheet
@@ -27,6 +27,9 @@ const HEADERS = [
   'imageFileId', 'imageUrl',
   'reservedExchange', 'reservedPurchase'
 ];
+const LIST_CACHE_KEY = 'photos_list_v5_3';
+const LIST_CACHE_SECONDS = 120;
+
 const CSV_HEADERS = [
   'ID', '建立時間', '更新時間',
   '生寫真系列', '成員名',
@@ -208,13 +211,19 @@ function doPost(e) {
       }
 
       case 'create':
-        return json_({ ok: true, item: createItem_(req.item, req.image) });
+        return json_({
+          ok: true,
+          item: createItemIdempotent_(req.item, req.image, req.uploadToken)
+        });
 
       case 'adjustQty':
         return json_({ ok: true, item: adjustQty_(req.id, req.quantity) });
 
       case 'updateType':
         return json_({ ok: true, item: updateType_(req.id, req.type) });
+
+      case 'updatePrice':
+        return json_({ ok: true, item: updatePrice_(req.id, req.unitPrice) });
 
       case 'updateStatus':
         return json_({ ok: true, item: updateStatus_(req.id, req.tradeStatus) });
@@ -508,6 +517,7 @@ function migrateSheetToV5_(sheet, oldHeaders) {
       }
 
       sheet.setFrozenRows(1);
+      invalidateListCache_();
     } catch (err) {
       sheet.clearContents();
       sheet
@@ -601,16 +611,50 @@ function normalizeDateValue_(value) {
 
 
 function listItems_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(LIST_CACHE_KEY);
+
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (err) {
+      cache.remove(LIST_CACHE_KEY);
+    }
+  }
+
   const sheet = getSheet_();
   const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return [];
 
-  return sheet
+  if (lastRow < 2) {
+    cache.put(LIST_CACHE_KEY, '[]', LIST_CACHE_SECONDS);
+    return [];
+  }
+
+  const items = sheet
     .getRange(2, 1, lastRow - 1, HEADERS.length)
     .getValues()
     .map(rowToItem_)
     .filter(Boolean)
     .sort((a, b) => String(b.createdAt).localeCompare(String(a.createdAt)));
+
+  try {
+    const json = JSON.stringify(items);
+    if (json.length < 90000) {
+      cache.put(LIST_CACHE_KEY, json, LIST_CACHE_SECONDS);
+    }
+  } catch (err) {
+    console.warn('List cache skipped: ' + err);
+  }
+
+  return items;
+}
+
+function invalidateListCache_() {
+  try {
+    CacheService.getScriptCache().remove(LIST_CACHE_KEY);
+  } catch (err) {
+    console.warn('Unable to clear list cache: ' + err);
+  }
 }
 
 function replaceAllItems_(items) {
@@ -680,6 +724,8 @@ function replaceAllItems_(items) {
       throw new Error('覆蓋失敗，已自動還原原資料：' + writeErr.message);
     }
 
+    invalidateListCache_();
+
     return {
       count: normalized.length,
       backupFileName: backupFile.getName(),
@@ -726,6 +772,50 @@ function csvEscape_(value) {
   return text;
 }
 
+function createItemIdempotent_(item, image, uploadToken) {
+  const token = String(uploadToken || '').trim();
+
+  // 舊版前端沒有 token 時仍相容。
+  if (!token) {
+    return createItem_(item, image);
+  }
+
+  const cache = CacheService.getScriptCache();
+  const cacheKey = 'upload_' + token;
+  const cached = cache.get(cacheKey);
+
+  if (cached) {
+    try {
+      return JSON.parse(cached);
+    } catch (err) {
+      cache.remove(cacheKey);
+    }
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(70000);
+
+  try {
+    // 等待 lock 後再次確認，避免手機重試造成重複新增。
+    const cachedAfterLock = cache.get(cacheKey);
+    if (cachedAfterLock) {
+      return JSON.parse(cachedAfterLock);
+    }
+
+    const created = createItem_(item, image);
+
+    try {
+      cache.put(cacheKey, JSON.stringify(created), 600);
+    } catch (err) {
+      console.warn('Unable to cache upload token: ' + err);
+    }
+
+    return created;
+  } finally {
+    lock.releaseLock();
+  }
+}
+
 function createItem_(item, image) {
   validateItem_(item);
 
@@ -738,6 +828,11 @@ function createItem_(item, image) {
     .getProperty('IMAGE_FOLDER_ID');
 
   if (!imageFolderId) throw new Error('Image folder is not initialized.');
+
+  // Base64 約比原始檔大 33%；手機端已壓縮，這裡再做合理上限保護。
+  if (String(image.base64).length > 2 * 1024 * 1024) {
+    throw new Error('圖片仍然過大，請重新選擇或稍後再試。');
+  }
 
   const bytes = Utilities.base64Decode(image.base64);
   const filename = sanitizeFilename_(image.filename || Utilities.getUuid() + '.jpg');
@@ -771,6 +866,7 @@ function createItem_(item, image) {
   };
 
   getSheet_().appendRow(itemToRow_(created));
+  invalidateListCache_();
   return created;
 }
 
@@ -782,8 +878,6 @@ function adjustQty_(id, quantity) {
   }
 
   const sheet = getSheet_();
-  ensureV5Headers_(sheet);
-
   const rowIndex = findRowById_(sheet, id);
   if (!rowIndex) throw new Error('Record not found.');
 
@@ -804,6 +898,8 @@ function adjustQty_(id, quantity) {
 
   sheet.getRange(rowIndex, quantityCol).setValue(qty);
   sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
+
+  invalidateListCache_();
 
   return rowToItem_(
     sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
@@ -831,6 +927,38 @@ function updateType_(id, type) {
   sheet.getRange(rowIndex, typeCol).setValue(String(type));
   sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
 
+  invalidateListCache_();
+
+  return rowToItem_(
+    sheet
+      .getRange(rowIndex, 1, 1, HEADERS.length)
+      .getValues()[0]
+  );
+}
+
+function updatePrice_(id, unitPrice) {
+  if (!id) throw new Error('Missing id.');
+
+  const price = Number(unitPrice);
+  if (!Number.isFinite(price) || price < 0) {
+    throw new Error('單價不可小於 0。');
+  }
+
+  const sheet = getSheet_();
+  const rowIndex = findRowById_(sheet, id);
+
+  if (!rowIndex) {
+    throw new Error('Record not found.');
+  }
+
+  const priceCol = HEADERS.indexOf('unitPrice') + 1;
+  const updatedAtCol = HEADERS.indexOf('updatedAt') + 1;
+
+  sheet.getRange(rowIndex, priceCol).setValue(price);
+  sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
+
+  invalidateListCache_();
+
   return rowToItem_(
     sheet
       .getRange(rowIndex, 1, 1, HEADERS.length)
@@ -845,8 +973,6 @@ function updateStatus_(id, tradeStatus) {
   }
 
   const sheet = getSheet_();
-  ensureV5Headers_(sheet);
-
   const rowIndex = findRowById_(sheet, id);
   if (!rowIndex) throw new Error('Record not found.');
 
@@ -855,6 +981,8 @@ function updateStatus_(id, tradeStatus) {
 
   sheet.getRange(rowIndex, statusCol).setValue(String(tradeStatus));
   sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
+
+  invalidateListCache_();
 
   return rowToItem_(
     sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
@@ -884,8 +1012,6 @@ function adjustReservation_(id, reservationType, delta) {
 
   try {
     const sheet = getSheet_();
-    ensureV5Headers_(sheet);
-
     const rowIndex = findRowById_(sheet, id);
     if (!rowIndex) throw new Error('Record not found.');
 
@@ -916,6 +1042,8 @@ function adjustReservation_(id, reservationType, delta) {
     sheet.getRange(rowIndex, reservationCol).setValue(next);
     sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
 
+    invalidateListCache_();
+
     return rowToItem_(
       sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
     );
@@ -944,6 +1072,7 @@ function deleteItem_(id) {
   }
 
   sheet.deleteRow(rowIndex);
+  invalidateListCache_();
 }
 
 function findRowById_(sheet, id) {
