@@ -1,5 +1,6 @@
 const STORAGE_KEY = "seishashin-inventory-demo-v2";
 const SETTINGS_KEY = "seishashin-inventory-settings-v1";
+const REMOTE_VIEW_CACHE_KEY = "seishashin-inventory-remote-view-v5.3";
 const PAGE_PARAMS = new URLSearchParams(window.location.search);
 const SHARE_TOKEN = PAGE_PARAMS.get("share") || "";
 const SHARE_API_URL = PAGE_PARAMS.get("api") || "";
@@ -163,37 +164,100 @@ function applyShareModeUI() {
   if (els.collectionTitle) els.collectionTitle.textContent = "收藏檢視";
   document.title = "生寫真收藏檢視";
 }
-async function loadRecords() {
+function readRemoteViewCache() {
   try {
-    if (IS_SHARE_MODE) {
+    const payload = JSON.parse(localStorage.getItem(REMOTE_VIEW_CACHE_KEY));
+    if (!payload || !Array.isArray(payload.items)) return null;
+    return payload;
+  } catch {
+    return null;
+  }
+}
+
+function writeRemoteViewCache(items) {
+  try {
+    localStorage.setItem(
+      REMOTE_VIEW_CACHE_KEY,
+      JSON.stringify({
+        savedAt: Date.now(),
+        items: items.map(normalizeRecord)
+      })
+    );
+  } catch {
+    // Cache failure must not block the app.
+  }
+}
+
+function clearRemoteViewCache() {
+  try {
+    localStorage.removeItem(REMOTE_VIEW_CACHE_KEY);
+  } catch {}
+}
+
+async function loadRecords(options = {}) {
+  const { useCache = true, quiet = false } = options;
+  let showedCachedData = false;
+
+  if (IS_SHARE_MODE) {
+    try {
       const data = await publicApi("publicList");
       records = (data.items || []).map(normalizeRecord);
-    } else if (isRemoteMode()) {
-      const data = await api("list");
-      records = (data.items || []).map(normalizeRecord);
-      setConnectionText("目前：Google Drive 模式");
-    } else {
-      records = getDemoRecords();
-      setConnectionText("目前：Demo 模式");
-    }
-  } catch (err) {
-    if (IS_SHARE_MODE) {
+      render();
+    } catch (err) {
       records = [];
       render();
-      showToast(`分享連結讀取失敗：${err.message}`);
+      if (!quiet) showToast(`分享連結讀取失敗：${err.message}`);
       if (els.emptyState) {
         els.emptyState.querySelector("h3").textContent = "分享連結無效或已失效";
         els.emptyState.querySelector("p").textContent = "請向分享者索取新的檢視連結。";
         els.emptyState.classList.remove("hidden");
       }
-      return;
     }
-    showToast(`讀取失敗：${err.message}`);
-    records = getDemoRecords();
-    setConnectionText("後端連線失敗，暫用 Demo 模式");
+    return;
   }
-  render();
+
+  try {
+    if (isRemoteMode()) {
+      if (useCache) {
+        const cached = readRemoteViewCache();
+        if (cached?.items?.length) {
+          records = cached.items.map(normalizeRecord);
+          setConnectionText("目前：Google Drive 模式・同步中…");
+          render();
+          showedCachedData = true;
+        }
+      }
+
+      const data = await api("list");
+      records = (data.items || []).map(normalizeRecord);
+      writeRemoteViewCache(records);
+      setConnectionText("目前：Google Drive 模式");
+      render();
+    } else {
+      records = getDemoRecords();
+      setConnectionText("目前：Demo 模式");
+      render();
+    }
+  } catch (err) {
+    if (!quiet) showToast(`讀取失敗：${err.message}`);
+
+    if (!showedCachedData) {
+      const cached = readRemoteViewCache();
+      if (cached?.items?.length) {
+        records = cached.items.map(normalizeRecord);
+        setConnectionText("後端暫時無法連線・顯示最近資料");
+        render();
+      } else {
+        records = getDemoRecords();
+        setConnectionText("後端連線失敗，暫用 Demo 模式");
+        render();
+      }
+    } else {
+      setConnectionText("同步失敗・顯示最近資料");
+    }
+  }
 }
+
 function render() {
   const q = els.searchInput.value.trim().toLowerCase();
   const type = els.typeFilter.value;
@@ -378,6 +442,12 @@ function updateType2Filter() {
     values.map(v => `<option value="${escapeHtml(v)}">${escapeHtml(v)}</option>`).join("");
   if (values.includes(current)) els.type2Filter.value = current;
 }
+function persistCurrentRemoteView() {
+  if (!IS_SHARE_MODE && isRemoteMode()) {
+    writeRemoteViewCache(records);
+  }
+}
+
 async function adjustQuantity(record, delta) {
   const reservedTotal = Number(record.reservedExchange || 0) + Number(record.reservedPurchase || 0);
   const next = Math.max(0, Number(record.quantity) + delta);
@@ -399,6 +469,7 @@ async function adjustQuantity(record, delta) {
       record.quantity = next;
       saveDemoRecords();
     }
+    persistCurrentRemoteView();
     render();
   } catch (err) {
     showToast(`更新失敗：${err.message}`);
@@ -418,6 +489,7 @@ async function updatePhotoType(record, nextType) {
     saveDemoRecords();
   }
 
+  persistCurrentRemoteView();
   render();
   showToast("類型1已更新");
 }
@@ -434,6 +506,7 @@ async function updateTradeStatus(record, nextStatus) {
     record.tradeStatus = nextStatus;
     saveDemoRecords();
   }
+  persistCurrentRemoteView();
   render();
   showToast("狀態已更新");
 }
@@ -464,6 +537,7 @@ async function adjustReservation(record, reservationType, delta) {
       record[field] = next;
       saveDemoRecords();
     }
+    persistCurrentRemoteView();
     render();
     showToast(delta > 0 ? `已新增 1 筆${label}預約` : `已取消 1 筆${label}預約`);
   } catch (err) {
@@ -476,6 +550,7 @@ async function deleteRecord(record) {
     if (isRemoteMode()) await api("delete", { id: record.id });
     records = records.filter(r => r.id !== record.id);
     if (!isRemoteMode()) saveDemoRecords();
+    persistCurrentRemoteView();
     render();
     showToast("已刪除");
   } catch (err) {
@@ -775,6 +850,7 @@ els.entryForm.addEventListener("submit", async e => {
     }
     resetEntryForm();
     els.entryDialog.close();
+    persistCurrentRemoteView();
     render();
     showToast("已新增生寫真");
   } catch (err) {
@@ -816,6 +892,7 @@ els.settingsForm.addEventListener("submit", async e => {
   const apiSecret = els.apiSecret.value.trim();
   if (!apiUrl || !apiSecret) return showToast("請填入 API URL 與存取金鑰");
   localStorage.setItem(SETTINGS_KEY, JSON.stringify({ apiUrl, apiSecret }));
+  clearRemoteViewCache();
   setConnectionText("測試連線中…");
   try {
     await api("ping");
@@ -829,6 +906,7 @@ els.settingsForm.addEventListener("submit", async e => {
 });
 els.clearSettingsBtn.addEventListener("click", async () => {
   localStorage.removeItem(SETTINGS_KEY);
+  clearRemoteViewCache();
   els.apiUrl.value = "";
   els.apiSecret.value = "";
   els.settingsDialog.close();

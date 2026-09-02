@@ -94,3 +94,31 @@ V5.1 不再要求既有 `photos` 工作表的欄位順序與 V5 完全一致。
 
 資料表 schema 沒有改，不需要執行 migration。
 重新發布 Apps Script 新版本即可。
+
+
+## V5.3 — 修正庫存更新錯誤與讀取速度優化
+
+### 修正
+V5.2 的部分更新函式仍呼叫已淘汰的 `ensureV5Headers_()`，會造成：
+`更新失敗：ensureV5Headers_ is not defined`
+
+V5.3 已移除所有殘留呼叫。Schema 驗證統一由 V5.1 的 `getSheet_()` / `ensureCompatibleSchema_()` 處理。
+
+### 效能
+- Apps Script `list` 使用短期 Script Cache（120 秒）。
+- 新增、刪除、修改數量、類型1、狀態、預約、CSV 覆蓋時立即清除後端 cache。
+- 管理端會保存最近一次成功讀取資料。
+- 重新整理時先顯示最近資料，再背景同步 Google Sheet。
+- 暫時連不到 Apps Script 時，優先顯示最近資料，不直接跳 Demo。
+
+### 升級
+資料表欄位沒有改，不需要 migration。
+
+更新：
+- `app.js`
+- `backend/Code.gs`
+
+完整 ZIP 也包含其他檔案。
+
+Apps Script 更新後必須重新發布：
+Deploy → Manage deployments → Edit → New version → Deploy
