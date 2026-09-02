@@ -1,10 +1,12 @@
 /**
- * 生寫真收藏庫 V2 - Google Apps Script backend
+ * 生寫真收藏庫 V4 - Google Apps Script backend
  *
  * 圖片：Google Drive / images
  * 屬性：Google Sheet
  *
- * V2 schema:
+ * V4：V2 schema + CSV 備份/覆蓋 + 唯讀分享連結
+ *
+ * schema:
  * - seriesName：生寫真系列
  * - type：類型1（全身 / 半身 / 大頭 / 坐姿）
  * - type2：類型2（可空白，自由文字）
@@ -156,7 +158,7 @@ function migrateToV2() {
 function doGet() {
   return json_({
     ok: true,
-    service: 'seishashin-inventory-v2',
+    service: 'seishashin-inventory-v4',
     message: 'Use POST API.'
   });
 }
@@ -168,6 +170,14 @@ function doPost(e) {
     }
 
     const req = JSON.parse(e.postData.contents);
+
+    // 唯讀分享端點：不使用 APP_SECRET，只驗證獨立的 SHARE_TOKEN。
+    if (req.action === 'publicList') {
+      verifyShareToken_(req.shareToken);
+      return json_({ ok: true, items: publicItems_() });
+    }
+
+    // 其餘皆為管理功能，必須通過 APP_SECRET。
     verifySecret_(req.secret);
 
     switch (req.action) {
@@ -179,6 +189,16 @@ function doPost(e) {
 
       case 'exportData':
         return json_({ ok: true, items: listItems_() });
+
+      case 'getShareInfo':
+        return json_({ ok: true, ...getShareInfo_() });
+
+      case 'rotateShareToken':
+        return json_({ ok: true, ...rotateShareToken_() });
+
+      case 'revokeShareToken':
+        revokeShareToken_();
+        return json_({ ok: true });
 
       case 'replaceAll': {
         const result = replaceAllItems_(req.items || []);
@@ -207,6 +227,54 @@ function verifySecret_(secret) {
   const expected = PropertiesService.getScriptProperties().getProperty('APP_SECRET');
   if (!expected) throw new Error('Server APP_SECRET is not configured.');
   if (!secret || secret !== expected) throw new Error('Unauthorized.');
+}
+
+function verifyShareToken_(token) {
+  const expected = PropertiesService.getScriptProperties().getProperty('SHARE_TOKEN');
+  if (!expected || !token || String(token) !== String(expected)) {
+    throw new Error('分享連結無效或已失效。');
+  }
+}
+
+function getShareInfo_() {
+  const props = PropertiesService.getScriptProperties();
+  const token = props.getProperty('SHARE_TOKEN') || '';
+  return {
+    enabled: Boolean(token),
+    token: token,
+    createdAt: props.getProperty('SHARE_CREATED_AT') || ''
+  };
+}
+
+function rotateShareToken_() {
+  const props = PropertiesService.getScriptProperties();
+  const token = (
+    Utilities.getUuid().replace(/-/g, '') +
+    Utilities.getUuid().replace(/-/g, '')
+  );
+  const createdAt = new Date().toISOString();
+  props.setProperty('SHARE_TOKEN', token);
+  props.setProperty('SHARE_CREATED_AT', createdAt);
+  return { token: token, createdAt: createdAt };
+}
+
+function revokeShareToken_() {
+  const props = PropertiesService.getScriptProperties();
+  props.deleteProperty('SHARE_TOKEN');
+  props.deleteProperty('SHARE_CREATED_AT');
+}
+
+function publicItems_() {
+  return listItems_().map(item => ({
+    seriesName: item.seriesName,
+    memberName: item.memberName,
+    type: item.type,
+    type2: item.type2,
+    quantity: item.quantity,
+    tradeStatus: item.tradeStatus,
+    unitPrice: item.unitPrice,
+    imageUrl: item.imageUrl
+  }));
 }
 
 function getSheet_() {

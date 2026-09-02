@@ -4,6 +4,7 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <meta name="theme-color" content="#eef9ff" />
+  <meta name="referrer" content="no-referrer" />
   <title>生寫真收藏庫</title>
   <link rel="stylesheet" href="styles.css" />
 </head>
@@ -13,10 +14,18 @@
       <p class="eyebrow">PHOTO INVENTORY</p>
       <h1>生寫真收藏庫</h1>
     </div>
-    <button id="settingsBtn" class="icon-btn" type="button" aria-label="設定">⚙</button>
+    <div class="header-actions">
+      <span id="shareModeBadge" class="share-mode-badge hidden">唯讀分享</span>
+      <button id="shareBtn" class="ghost-btn admin-only" type="button">🔗 分享檢視</button>
+      <button id="settingsBtn" class="icon-btn admin-only" type="button" aria-label="設定">⚙</button>
+    </div>
   </header>
 
   <main class="shell">
+    <section id="shareBanner" class="share-banner hidden">
+      <strong>唯讀收藏檢視</strong>
+      <span>這個頁面只能瀏覽與篩選，無法修改收藏資料。</span>
+    </section>
     <section class="stats-grid" aria-label="收藏統計">
       <article class="stat-card"><span>總張數</span><strong id="statTotal">0</strong></article>
       <article class="stat-card"><span>不同款式</span><strong id="statUnique">0</strong></article>
@@ -45,7 +54,7 @@
         <option value="可賣">可賣</option>
         <option value="求">求</option>
       </select>
-      <div class="toolbar-actions">
+      <div class="toolbar-actions admin-only">
         <button id="downloadBtn" class="ghost-btn data-btn" type="button">⇩ 下載 CSV</button>
         <button id="uploadBtn" class="ghost-btn data-btn" type="button">⇧ 上傳 CSV</button>
         <input id="csvInput" type="file" accept=".csv,text/csv" hidden />
@@ -55,7 +64,7 @@
 
     <section>
       <div class="section-head">
-        <div><p class="eyebrow">COLLECTION</p><h2>我的收藏</h2></div>
+        <div><p class="eyebrow">COLLECTION</p><h2 id="collectionTitle">我的收藏</h2></div>
         <span id="resultCount" class="muted">0 筆</span>
       </div>
       <div id="seriesContainer" class="series-container"></div>
@@ -152,6 +161,30 @@
     </form>
   </dialog>
 
+  <dialog id="shareDialog" class="modal compact">
+    <form method="dialog">
+      <div class="modal-head">
+        <div><p class="eyebrow">READ ONLY SHARE</p><h2>分享檢視連結</h2></div>
+        <button id="shareCloseBtn" class="icon-btn" type="button" aria-label="關閉">✕</button>
+      </div>
+      <p class="settings-note">
+        分享連結只提供唯讀檢視，不會包含管理用 APP_SECRET。重新產生連結後，上一個分享網址會立即失效。
+      </p>
+      <label class="share-link-label">
+        <span>目前分享連結</span>
+        <div class="share-link-row">
+          <input id="shareLinkInput" type="text" readonly placeholder="尚未產生分享連結" />
+          <button id="copyShareBtn" type="button" class="ghost-btn" disabled>複製</button>
+        </div>
+      </label>
+      <div id="shareState" class="connection-state">尚未讀取分享狀態</div>
+      <div class="modal-actions share-actions">
+        <button id="revokeShareBtn" type="button" class="danger-ghost-btn" disabled>停用分享</button>
+        <button id="generateShareBtn" type="button" class="primary-btn">產生分享連結</button>
+      </div>
+    </form>
+  </dialog>
+
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <template id="seriesTemplate">
@@ -178,10 +211,10 @@
         <div class="type2-row hidden"><span class="type2-chip"></span></div>
         <div class="meta-row">
           <span>數量</span>
-          <div class="qty-stepper"><button class="qty-minus" type="button">−</button><strong class="card-qty"></strong><button class="qty-plus" type="button">＋</button></div>
+          <div class="qty-stepper"><button class="qty-minus admin-only" type="button">−</button><strong class="card-qty"></strong><button class="qty-plus admin-only" type="button">＋</button></div>
         </div>
         <div class="meta-row"><span>單價</span><strong class="card-price"></strong></div>
-        <div class="card-actions"><button class="delete-btn" type="button">刪除</button></div>
+        <div class="card-actions admin-only"><button class="delete-btn" type="button">刪除</button></div>
       </div>
     </article>
   </template>

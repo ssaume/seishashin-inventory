@@ -1,5 +1,9 @@
 const STORAGE_KEY = "seishashin-inventory-demo-v2";
 const SETTINGS_KEY = "seishashin-inventory-settings-v1";
+const PAGE_PARAMS = new URLSearchParams(window.location.search);
+const SHARE_TOKEN = PAGE_PARAMS.get("share") || "";
+const SHARE_API_URL = PAGE_PARAMS.get("api") || "";
+const IS_SHARE_MODE = Boolean(SHARE_TOKEN && SHARE_API_URL);
 const CSV_COLUMNS = [
   ["id", "ID"],
   ["createdAt", "建立時間"],
@@ -57,7 +61,18 @@ const els = {
   settingsCloseBtn: document.querySelector("#settingsCloseBtn"),
   memberSuggestions: document.querySelector("#memberSuggestions"),
   type2Suggestions: document.querySelector("#type2Suggestions"),
-  saveEntryBtn: document.querySelector("#saveEntryBtn")
+  saveEntryBtn: document.querySelector("#saveEntryBtn"),
+  shareBtn: document.querySelector("#shareBtn"),
+  shareDialog: document.querySelector("#shareDialog"),
+  shareCloseBtn: document.querySelector("#shareCloseBtn"),
+  shareLinkInput: document.querySelector("#shareLinkInput"),
+  copyShareBtn: document.querySelector("#copyShareBtn"),
+  generateShareBtn: document.querySelector("#generateShareBtn"),
+  revokeShareBtn: document.querySelector("#revokeShareBtn"),
+  shareState: document.querySelector("#shareState"),
+  shareModeBadge: document.querySelector("#shareModeBadge"),
+  shareBanner: document.querySelector("#shareBanner"),
+  collectionTitle: document.querySelector("#collectionTitle")
 };
 
 let records = [];
@@ -110,9 +125,45 @@ async function api(action, payload = {}) {
   if (!data.ok) throw new Error(data.error || "API 發生錯誤");
   return data;
 }
+async function publicApi(action, payload = {}) {
+  if (!SHARE_API_URL || !SHARE_TOKEN) throw new Error("分享連結資訊不完整");
+  const res = await fetch(SHARE_API_URL, {
+    method: "POST",
+    redirect: "follow",
+    headers: { "Content-Type": "text/plain;charset=utf-8" },
+    body: JSON.stringify({ action, shareToken: SHARE_TOKEN, ...payload })
+  });
+  if (!res.ok) throw new Error(`API HTTP ${res.status}`);
+  const data = await res.json();
+  if (!data.ok) throw new Error(data.error || "分享連結無法讀取");
+  return data;
+}
+
+function buildShareUrl(token) {
+  const { apiUrl } = getSettings();
+  if (!apiUrl) throw new Error("尚未設定 Apps Script API URL");
+  const url = new URL(window.location.href);
+  url.search = "";
+  url.hash = "";
+  url.searchParams.set("share", token);
+  url.searchParams.set("api", apiUrl);
+  return url.toString();
+}
+
+function applyShareModeUI() {
+  if (!IS_SHARE_MODE) return;
+  document.body.classList.add("share-mode");
+  els.shareModeBadge?.classList.remove("hidden");
+  els.shareBanner?.classList.remove("hidden");
+  if (els.collectionTitle) els.collectionTitle.textContent = "收藏檢視";
+  document.title = "生寫真收藏檢視";
+}
 async function loadRecords() {
   try {
-    if (isRemoteMode()) {
+    if (IS_SHARE_MODE) {
+      const data = await publicApi("publicList");
+      records = (data.items || []).map(normalizeRecord);
+    } else if (isRemoteMode()) {
       const data = await api("list");
       records = (data.items || []).map(normalizeRecord);
       setConnectionText("目前：Google Drive 模式");
@@ -121,6 +172,17 @@ async function loadRecords() {
       setConnectionText("目前：Demo 模式");
     }
   } catch (err) {
+    if (IS_SHARE_MODE) {
+      records = [];
+      render();
+      showToast(`分享連結讀取失敗：${err.message}`);
+      if (els.emptyState) {
+        els.emptyState.querySelector("h3").textContent = "分享連結無效或已失效";
+        els.emptyState.querySelector("p").textContent = "請向分享者索取新的檢視連結。";
+        els.emptyState.classList.remove("hidden");
+      }
+      return;
+    }
     showToast(`讀取失敗：${err.message}`);
     records = getDemoRecords();
     setConnectionText("後端連線失敗，暫用 Demo 模式");
@@ -206,9 +268,11 @@ function buildCard(record) {
     node.querySelector(".type2-chip").textContent = `類型2：${record.type2}`;
   }
 
-  node.querySelector(".qty-minus").addEventListener("click", () => adjustQuantity(record, -1));
-  node.querySelector(".qty-plus").addEventListener("click", () => adjustQuantity(record, 1));
-  node.querySelector(".delete-btn").addEventListener("click", () => deleteRecord(record));
+  if (!IS_SHARE_MODE) {
+    node.querySelector(".qty-minus").addEventListener("click", () => adjustQuantity(record, -1));
+    node.querySelector(".qty-plus").addEventListener("click", () => adjustQuantity(record, 1));
+    node.querySelector(".delete-btn").addEventListener("click", () => deleteRecord(record));
+  }
   return node;
 }
 function updateStats() {
@@ -344,6 +408,97 @@ function csvRowsToRecords(rows) {
   }
   return result;
 }
+
+async function refreshShareDialog() {
+  if (!isRemoteMode()) {
+    els.shareState.textContent = "請先連接 Google Drive 後端，才能建立分享連結。";
+    els.shareLinkInput.value = "";
+    els.copyShareBtn.disabled = true;
+    els.revokeShareBtn.disabled = true;
+    return;
+  }
+  els.shareState.textContent = "讀取分享狀態中…";
+  try {
+    const info = await api("getShareInfo");
+    if (info.enabled && info.token) {
+      els.shareLinkInput.value = buildShareUrl(info.token);
+      els.copyShareBtn.disabled = false;
+      els.revokeShareBtn.disabled = false;
+      els.generateShareBtn.textContent = "重新產生連結";
+      els.shareState.textContent = info.createdAt
+        ? `分享中・建立時間 ${new Date(info.createdAt).toLocaleString()}`
+        : "分享中";
+    } else {
+      els.shareLinkInput.value = "";
+      els.copyShareBtn.disabled = true;
+      els.revokeShareBtn.disabled = true;
+      els.generateShareBtn.textContent = "產生分享連結";
+      els.shareState.textContent = "目前沒有有效的分享連結。";
+    }
+  } catch (err) {
+    els.shareState.textContent = `讀取失敗：${err.message}`;
+  }
+}
+
+els.shareBtn.addEventListener("click", async () => {
+  if (!isRemoteMode()) return showToast("請先連接 Google Drive 後端");
+  els.shareDialog.showModal();
+  await refreshShareDialog();
+});
+
+els.shareCloseBtn.addEventListener("click", () => els.shareDialog.close());
+
+els.generateShareBtn.addEventListener("click", async () => {
+  if (!isRemoteMode()) return showToast("請先連接 Google Drive 後端");
+  const replacing = Boolean(els.shareLinkInput.value);
+  if (replacing && !confirm("重新產生後，舊的分享連結會立即失效。確定繼續嗎？")) return;
+  els.generateShareBtn.disabled = true;
+  els.generateShareBtn.textContent = "產生中…";
+  try {
+    const data = await api("rotateShareToken");
+    els.shareLinkInput.value = buildShareUrl(data.token);
+    els.copyShareBtn.disabled = false;
+    els.revokeShareBtn.disabled = false;
+    els.shareState.textContent = "新的唯讀分享連結已建立。";
+    els.generateShareBtn.textContent = "重新產生連結";
+    showToast("已產生分享連結");
+  } catch (err) {
+    showToast(`產生失敗：${err.message}`);
+  } finally {
+    els.generateShareBtn.disabled = false;
+    if (!els.shareLinkInput.value) els.generateShareBtn.textContent = "產生分享連結";
+  }
+});
+
+els.copyShareBtn.addEventListener("click", async () => {
+  const value = els.shareLinkInput.value;
+  if (!value) return;
+  try {
+    await navigator.clipboard.writeText(value);
+  } catch {
+    els.shareLinkInput.focus();
+    els.shareLinkInput.select();
+    document.execCommand("copy");
+  }
+  showToast("分享連結已複製");
+});
+
+els.revokeShareBtn.addEventListener("click", async () => {
+  if (!confirm("停用後，目前的分享連結會立即失效。確定停用嗎？")) return;
+  els.revokeShareBtn.disabled = true;
+  try {
+    await api("revokeShareToken");
+    els.shareLinkInput.value = "";
+    els.copyShareBtn.disabled = true;
+    els.generateShareBtn.textContent = "產生分享連結";
+    els.shareState.textContent = "分享已停用。";
+    showToast("分享連結已停用");
+  } catch (err) {
+    showToast(`停用失敗：${err.message}`);
+  } finally {
+    els.revokeShareBtn.disabled = !els.shareLinkInput.value;
+  }
+});
 
 els.downloadBtn.addEventListener("click", async () => {
   try {
@@ -569,4 +724,5 @@ function showToast(message) {
   toastTimer = setTimeout(() => els.toast.classList.remove("show"), 2600);
 }
 
+applyShareModeUI();
 loadRecords();
