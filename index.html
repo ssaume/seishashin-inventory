@@ -97,7 +97,8 @@
       <div class="form-grid">
         <label class="full">
           <span>生寫真系列 *</span>
-          <input id="seriesName" name="seriesName" required placeholder="例如：18th 制服生寫真" />
+          <input id="seriesName" name="seriesName" required placeholder="例如：18th 制服生寫真" list="seriesSuggestions" />
+          <datalist id="seriesSuggestions"></datalist>
         </label>
         <label>
           <span>成員名 *</span>
@@ -210,10 +211,66 @@
         </div>
         <div class="type2-row hidden"><span class="type2-chip"></span></div>
         <div class="meta-row">
-          <span>數量</span>
-          <div class="qty-stepper"><button class="qty-minus admin-only" type="button">−</button><strong class="card-qty"></strong><button class="qty-plus admin-only" type="button">＋</button></div>
+          <span>在庫數量</span>
+          <div class="qty-stepper">
+            <button class="qty-minus admin-only" type="button">−</button>
+            <strong class="card-qty"></strong>
+            <button class="qty-plus admin-only" type="button">＋</button>
+          </div>
         </div>
-        <div class="meta-row"><span>單價</span><strong class="card-price"></strong></div>
+
+        <div class="meta-row available-row">
+          <span>可用數量</span>
+          <strong class="card-available"></strong>
+        </div>
+
+        <div class="meta-row">
+          <span>單價</span>
+          <strong class="card-price"></strong>
+        </div>
+
+        <div class="admin-only status-edit-row">
+          <label>
+            <span>狀態</span>
+            <select class="card-status-select">
+              <option value="非賣">非賣</option>
+              <option value="可換">可換</option>
+              <option value="可賣">可賣</option>
+              <option value="求">求</option>
+            </select>
+          </label>
+        </div>
+
+        <div class="reservation-panel">
+          <div class="reservation-row">
+            <div>
+              <span>預約交換</span>
+              <small class="exchange-label"></small>
+            </div>
+            <div class="reservation-control">
+              <button class="reserve-exchange-minus admin-only" type="button">−</button>
+              <strong class="reserve-exchange-count">0</strong>
+              <button class="reserve-exchange-plus admin-only" type="button">＋</button>
+            </div>
+          </div>
+
+          <div class="reservation-row">
+            <div>
+              <span>預約購買</span>
+              <small class="purchase-label"></small>
+            </div>
+            <div class="reservation-control">
+              <button class="reserve-purchase-minus admin-only" type="button">−</button>
+              <strong class="reserve-purchase-count">0</strong>
+              <button class="reserve-purchase-plus admin-only" type="button">＋</button>
+            </div>
+          </div>
+
+          <div class="stock-state-row">
+            <span class="stock-state-badge"></span>
+          </div>
+        </div>
+
         <div class="card-actions admin-only"><button class="delete-btn" type="button">刪除</button></div>
       </div>
     </article>

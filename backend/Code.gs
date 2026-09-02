@@ -1,10 +1,10 @@
 /**
- * 生寫真收藏庫 V4 - Google Apps Script backend
+ * 生寫真收藏庫 V5 - Google Apps Script backend
  *
  * 圖片：Google Drive / images
  * 屬性：Google Sheet
  *
- * V4：V2 schema + CSV 備份/覆蓋 + 唯讀分享連結
+ * V5：V4 + 狀態即時維護 + 預約交換/購買 + 可用數量
  *
  * schema:
  * - seriesName：生寫真系列
@@ -24,14 +24,16 @@ const HEADERS = [
   'seriesName', 'memberName',
   'type', 'type2',
   'quantity', 'tradeStatus', 'unitPrice',
-  'imageFileId', 'imageUrl'
+  'imageFileId', 'imageUrl',
+  'reservedExchange', 'reservedPurchase'
 ];
 const CSV_HEADERS = [
   'ID', '建立時間', '更新時間',
   '生寫真系列', '成員名',
   '類型1', '類型2',
   '數量', '狀態', '單價',
-  '圖片File ID', '圖片URL'
+  '圖片File ID', '圖片URL',
+  '預約交換', '預約購買'
 ];
 
 function setupStorage() {
@@ -211,6 +213,12 @@ function doPost(e) {
       case 'adjustQty':
         return json_({ ok: true, item: adjustQty_(req.id, req.quantity) });
 
+      case 'updateStatus':
+        return json_({ ok: true, item: updateStatus_(req.id, req.tradeStatus) });
+
+      case 'adjustReservation':
+        return json_({ ok: true, item: adjustReservation_(req.id, req.reservationType, req.delta) });
+
       case 'delete':
         deleteItem_(req.id);
         return json_({ ok: true });
@@ -273,7 +281,15 @@ function publicItems_() {
     quantity: item.quantity,
     tradeStatus: item.tradeStatus,
     unitPrice: item.unitPrice,
-    imageUrl: item.imageUrl
+    imageUrl: item.imageUrl,
+    reservedExchange: item.reservedExchange,
+    reservedPurchase: item.reservedPurchase,
+    availableQuantity: Math.max(
+      0,
+      Number(item.quantity || 0) -
+      Number(item.reservedExchange || 0) -
+      Number(item.reservedPurchase || 0)
+    )
   }));
 }
 
@@ -285,7 +301,57 @@ function getSheet_() {
   const sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) throw new Error('Metadata sheet is missing.');
 
+  ensureV5Headers_(sheet);
   return sheet;
+}
+
+function ensureV5Headers_(sheet) {
+  const current = sheet
+    .getRange(1, 1, 1, Math.max(sheet.getLastColumn(), HEADERS.length))
+    .getValues()[0]
+    .slice(0, HEADERS.length)
+    .map(String);
+
+  const expectedPrefix = HEADERS.slice(0, 12);
+
+  const hasCompatiblePrefix = expectedPrefix.every(
+    (header, i) => !current[i] || current[i] === header
+  );
+
+  if (!hasCompatiblePrefix) {
+    throw new Error('資料表欄位格式與 V5 不相容，請先確認 photos 工作表欄位。');
+  }
+
+  if (current.join('|') !== HEADERS.join('|')) {
+    sheet.getRange(1, 1, 1, HEADERS.length).setValues([HEADERS]);
+    sheet.setFrozenRows(1);
+  }
+}
+
+function migrateToV5() {
+  const sheet = getSheet_();
+  ensureV5Headers_(sheet);
+
+  if (sheet.getLastRow() > 1) {
+    const exCol = HEADERS.indexOf('reservedExchange') + 1;
+    const buyCol = HEADERS.indexOf('reservedPurchase') + 1;
+    const rowCount = sheet.getLastRow() - 1;
+
+    const exValues = sheet.getRange(2, exCol, rowCount, 1).getValues();
+    const buyValues = sheet.getRange(2, buyCol, rowCount, 1).getValues();
+
+    exValues.forEach(row => {
+      if (row[0] === '' || row[0] === null) row[0] = 0;
+    });
+    buyValues.forEach(row => {
+      if (row[0] === '' || row[0] === null) row[0] = 0;
+    });
+
+    sheet.getRange(2, exCol, rowCount, 1).setValues(exValues);
+    sheet.getRange(2, buyCol, rowCount, 1).setValues(buyValues);
+  }
+
+  Logger.log('V5 schema ready.');
 }
 
 function listItems_() {
@@ -321,7 +387,9 @@ function replaceAllItems_(items) {
         ? 0
         : Number(item.unitPrice),
       imageFileId: String(item.imageFileId || '').trim(),
-      imageUrl: String(item.imageUrl || '').trim()
+      imageUrl: String(item.imageUrl || '').trim(),
+      reservedExchange: Number(item.reservedExchange || 0),
+      reservedPurchase: Number(item.reservedPurchase || 0)
     };
     try {
       validateItem_(candidate);
@@ -451,7 +519,9 @@ function createItem_(item, image) {
     tradeStatus: String(item.tradeStatus),
     unitPrice: Number(item.unitPrice || 0),
     imageFileId: file.getId(),
-    imageUrl: `https://drive.google.com/thumbnail?id=${file.getId()}&sz=w1200`
+    imageUrl: `https://drive.google.com/thumbnail?id=${file.getId()}&sz=w1200`,
+    reservedExchange: 0,
+    reservedPurchase: 0
   };
 
   getSheet_().appendRow(itemToRow_(created));
@@ -466,8 +536,22 @@ function adjustQty_(id, quantity) {
   }
 
   const sheet = getSheet_();
+  ensureV5Headers_(sheet);
+
   const rowIndex = findRowById_(sheet, id);
   if (!rowIndex) throw new Error('Record not found.');
+
+  const current = rowToItem_(
+    sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+  );
+
+  const reservedTotal =
+    Number(current.reservedExchange || 0) +
+    Number(current.reservedPurchase || 0);
+
+  if (qty < reservedTotal) {
+    throw new Error('在庫數量不可低於已預約總數 ' + reservedTotal + '。');
+  }
 
   const quantityCol = HEADERS.indexOf('quantity') + 1;
   const updatedAtCol = HEADERS.indexOf('updatedAt') + 1;
@@ -478,6 +562,92 @@ function adjustQty_(id, quantity) {
   return rowToItem_(
     sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
   );
+}
+
+function updateStatus_(id, tradeStatus) {
+  if (!id) throw new Error('Missing id.');
+  if (!['非賣', '可換', '可賣', '求'].includes(String(tradeStatus))) {
+    throw new Error('狀態不正確。');
+  }
+
+  const sheet = getSheet_();
+  ensureV5Headers_(sheet);
+
+  const rowIndex = findRowById_(sheet, id);
+  if (!rowIndex) throw new Error('Record not found.');
+
+  const statusCol = HEADERS.indexOf('tradeStatus') + 1;
+  const updatedAtCol = HEADERS.indexOf('updatedAt') + 1;
+
+  sheet.getRange(rowIndex, statusCol).setValue(String(tradeStatus));
+  sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
+
+  return rowToItem_(
+    sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+  );
+}
+
+function adjustReservation_(id, reservationType, delta) {
+  if (!id) throw new Error('Missing id.');
+
+  const change = Number(delta);
+  if (![1, -1].includes(change)) {
+    throw new Error('Reservation delta must be +1 or -1.');
+  }
+
+  const field = reservationType === 'exchange'
+    ? 'reservedExchange'
+    : reservationType === 'purchase'
+      ? 'reservedPurchase'
+      : '';
+
+  if (!field) {
+    throw new Error('Reservation type must be exchange or purchase.');
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+
+  try {
+    const sheet = getSheet_();
+    ensureV5Headers_(sheet);
+
+    const rowIndex = findRowById_(sheet, id);
+    if (!rowIndex) throw new Error('Record not found.');
+
+    const item = rowToItem_(
+      sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+    );
+
+    const current = Number(item[field] || 0);
+    const next = current + change;
+
+    if (next < 0) {
+      throw new Error('預約數量不可小於 0。');
+    }
+
+    const otherField = field === 'reservedExchange'
+      ? 'reservedPurchase'
+      : 'reservedExchange';
+
+    const newReservedTotal = next + Number(item[otherField] || 0);
+
+    if (newReservedTotal > Number(item.quantity || 0)) {
+      throw new Error('目前沒有可用庫存可新增預約。');
+    }
+
+    const reservationCol = HEADERS.indexOf(field) + 1;
+    const updatedAtCol = HEADERS.indexOf('updatedAt') + 1;
+
+    sheet.getRange(rowIndex, reservationCol).setValue(next);
+    sheet.getRange(rowIndex, updatedAtCol).setValue(new Date().toISOString());
+
+    return rowToItem_(
+      sheet.getRange(rowIndex, 1, 1, HEADERS.length).getValues()[0]
+    );
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 function deleteItem_(id) {
@@ -540,6 +710,21 @@ function validateItem_(item) {
   if (!Number.isFinite(p) || p < 0) {
     throw new Error('單價不可小於 0。');
   }
+
+  const reservedExchange = Number(item.reservedExchange || 0);
+  const reservedPurchase = Number(item.reservedPurchase || 0);
+
+  if (!Number.isInteger(reservedExchange) || reservedExchange < 0) {
+    throw new Error('預約交換必須為 0 以上整數。');
+  }
+
+  if (!Number.isInteger(reservedPurchase) || reservedPurchase < 0) {
+    throw new Error('預約購買必須為 0 以上整數。');
+  }
+
+  if (reservedExchange + reservedPurchase > q) {
+    throw new Error('預約總數不可大於在庫數量。');
+  }
 }
 
 function rowToItem_(row) {
@@ -552,6 +737,12 @@ function rowToItem_(row) {
   obj.unitPrice = Number(obj.unitPrice || 0);
   obj.type2 = String(obj.type2 || '');
   obj.tradeStatus = String(obj.tradeStatus || '非賣');
+  obj.reservedExchange = Math.max(0, Number(obj.reservedExchange || 0));
+  obj.reservedPurchase = Math.max(0, Number(obj.reservedPurchase || 0));
+  obj.availableQuantity = Math.max(
+    0,
+    obj.quantity - obj.reservedExchange - obj.reservedPurchase
+  );
 
   return obj;
 }

@@ -251,3 +251,103 @@ input:focus,select:focus { border-color: var(--accent-strong); box-shadow: 0 0 0
   .type-chip { font-size: .66rem; }
 }
 @media (max-width:390px) { .gallery { grid-template-columns: 1fr; } }
+
+
+/* V5: status editing + reservations */
+.status-edit-row {
+  border-top: 1px solid #eaf3f8;
+  padding: 10px 0;
+}
+.status-edit-row label {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  color: var(--muted);
+  font-size: .84rem;
+}
+.card-status-select {
+  width: auto;
+  min-width: 104px;
+  padding: 7px 10px;
+  font-size: .82rem;
+}
+
+.available-row strong {
+  font-size: 1rem;
+  color: var(--accent-deep);
+}
+
+.reservation-panel {
+  border-top: 1px solid #eaf3f8;
+  padding-top: 7px;
+}
+.reservation-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  align-items: center;
+  padding: 7px 0;
+  color: var(--muted);
+  font-size: .82rem;
+}
+.reservation-row > div:first-child {
+  display: grid;
+  gap: 1px;
+}
+.reservation-row small {
+  font-size: .69rem;
+  color: #8da1af;
+}
+.reservation-control {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+.reservation-control strong {
+  min-width: 22px;
+  text-align: center;
+  color: var(--ink);
+}
+.reservation-control button {
+  width: 27px;
+  height: 27px;
+  padding: 0;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  background: #fff;
+  color: var(--accent-deep);
+}
+.reservation-control button:disabled,
+.qty-stepper button:disabled {
+  opacity: .35;
+  cursor: not-allowed;
+}
+.stock-state-row {
+  display: flex;
+  justify-content: flex-end;
+  padding: 5px 0 2px;
+}
+.stock-state-badge {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 5px 9px;
+  font-size: .72rem;
+  font-weight: 800;
+}
+.stock-state-badge.in-stock {
+  background: #e6f7ed;
+  color: #267848;
+}
+.stock-state-badge.out-of-stock {
+  background: #f3f5f6;
+  color: #6c7b84;
+}
+
+body.share-mode .status-edit-row {
+  display: none !important;
+}
+body.share-mode .reservation-row small {
+  display: none;
+}

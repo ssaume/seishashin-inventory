@@ -16,7 +16,9 @@ const CSV_COLUMNS = [
   ["tradeStatus", "狀態"],
   ["unitPrice", "單價"],
   ["imageFileId", "圖片File ID"],
-  ["imageUrl", "圖片URL"]
+  ["imageUrl", "圖片URL"],
+  ["reservedExchange", "預約交換"],
+  ["reservedPurchase", "預約購買"]
 ];
 const PLACEHOLDER = "data:image/svg+xml;charset=UTF-8," + encodeURIComponent(`
 <svg xmlns="http://www.w3.org/2000/svg" width="600" height="800">
@@ -59,6 +61,7 @@ const els = {
   connectionState: document.querySelector("#connectionState"),
   clearSettingsBtn: document.querySelector("#clearSettingsBtn"),
   settingsCloseBtn: document.querySelector("#settingsCloseBtn"),
+  seriesSuggestions: document.querySelector("#seriesSuggestions"),
   memberSuggestions: document.querySelector("#memberSuggestions"),
   type2Suggestions: document.querySelector("#type2Suggestions"),
   saveEntryBtn: document.querySelector("#saveEntryBtn"),
@@ -91,7 +94,9 @@ function normalizeRecord(r) {
     ...r,
     seriesName: r.seriesName || r.photoName || "",
     type2: r.type2 || "",
-    tradeStatus: r.tradeStatus || (r.sellable === true ? "可賣" : "非賣")
+    tradeStatus: r.tradeStatus || (r.sellable === true ? "可賣" : "非賣"),
+    reservedExchange: Math.max(0, Number(r.reservedExchange || 0)),
+    reservedPurchase: Math.max(0, Number(r.reservedPurchase || 0))
   };
 }
 function getDemoRecords() {
@@ -100,10 +105,10 @@ function getDemoRecords() {
     if (Array.isArray(saved)) return saved.map(normalizeRecord);
   } catch {}
   const seed = [
-    { id: crypto.randomUUID(), createdAt: new Date().toISOString(), seriesName: "18th 制服生寫真", memberName: "松尾桜", type: "全身", type2: "", quantity: 2, tradeStatus: "非賣", unitPrice: 250, imageUrl: PLACEHOLDER },
-    { id: crypto.randomUUID(), createdAt: new Date().toISOString(), seriesName: "18th 制服生寫真", memberName: "大田美月", type: "半身", type2: "ヨリ", quantity: 1, tradeStatus: "可換", unitPrice: 300, imageUrl: PLACEHOLDER },
-    { id: crypto.randomUUID(), createdAt: new Date().toISOString(), seriesName: "五期生 LIVE", memberName: "大野愛実", type: "大頭", type2: "特典", quantity: 1, tradeStatus: "求", unitPrice: 0, imageUrl: PLACEHOLDER },
-    { id: crypto.randomUUID(), createdAt: new Date().toISOString(), seriesName: "五期生 LIVE", memberName: "松尾桜", type: "坐姿", type2: "", quantity: 3, tradeStatus: "可賣", unitPrice: 280, imageUrl: PLACEHOLDER }
+    { id: crypto.randomUUID(), createdAt: new Date().toISOString(), seriesName: "18th 制服生寫真", memberName: "松尾桜", type: "全身", type2: "", quantity: 2, tradeStatus: "非賣", unitPrice: 250, imageUrl: PLACEHOLDER, reservedExchange: 0, reservedPurchase: 0 },
+    { id: crypto.randomUUID(), createdAt: new Date().toISOString(), seriesName: "18th 制服生寫真", memberName: "大田美月", type: "半身", type2: "ヨリ", quantity: 1, tradeStatus: "可換", unitPrice: 300, imageUrl: PLACEHOLDER, reservedExchange: 0, reservedPurchase: 0 },
+    { id: crypto.randomUUID(), createdAt: new Date().toISOString(), seriesName: "五期生 LIVE", memberName: "大野愛実", type: "大頭", type2: "特典", quantity: 1, tradeStatus: "求", unitPrice: 0, imageUrl: PLACEHOLDER, reservedExchange: 0, reservedPurchase: 0 },
+    { id: crypto.randomUUID(), createdAt: new Date().toISOString(), seriesName: "五期生 LIVE", memberName: "松尾桜", type: "坐姿", type2: "", quantity: 3, tradeStatus: "可賣", unitPrice: 280, imageUrl: PLACEHOLDER, reservedExchange: 0, reservedPurchase: 0 }
   ];
   localStorage.setItem(STORAGE_KEY, JSON.stringify(seed));
   return seed;
@@ -247,6 +252,7 @@ function renderSeriesGroups(filtered) {
 }
 function buildCard(record) {
   const node = els.cardTemplate.content.cloneNode(true);
+
   const img = node.querySelector(".card-img");
   img.src = record.imageUrl || PLACEHOLDER;
   img.alt = `${record.memberName} ${record.seriesName} ${record.type}`;
@@ -258,6 +264,20 @@ function buildCard(record) {
   node.querySelector(".card-qty").textContent = record.quantity;
   node.querySelector(".card-price").textContent = Number(record.unitPrice || 0).toLocaleString();
 
+  const reservedExchange = Number(record.reservedExchange || 0);
+  const reservedPurchase = Number(record.reservedPurchase || 0);
+  const available = Math.max(0, Number(record.quantity || 0) - reservedExchange - reservedPurchase);
+
+  node.querySelector(".card-available").textContent = available.toLocaleString();
+  node.querySelector(".reserve-exchange-count").textContent = reservedExchange.toLocaleString();
+  node.querySelector(".reserve-purchase-count").textContent = reservedPurchase.toLocaleString();
+  node.querySelector(".exchange-label").textContent = reservedExchange > 0 ? "已有交換預約" : "尚無交換預約";
+  node.querySelector(".purchase-label").textContent = reservedPurchase > 0 ? "已有購買預約" : "尚無購買預約";
+
+  const stockBadge = node.querySelector(".stock-state-badge");
+  stockBadge.textContent = available > 0 ? `尚有庫存 ${available}` : "目前無可用庫存";
+  stockBadge.classList.add(available > 0 ? "in-stock" : "out-of-stock");
+
   const badge = node.querySelector(".status-badge");
   badge.textContent = record.tradeStatus;
   badge.classList.add(`status-${record.tradeStatus}`);
@@ -268,11 +288,46 @@ function buildCard(record) {
     node.querySelector(".type2-chip").textContent = `類型2：${record.type2}`;
   }
 
+  const statusSelect = node.querySelector(".card-status-select");
+  statusSelect.value = record.tradeStatus;
+
   if (!IS_SHARE_MODE) {
-    node.querySelector(".qty-minus").addEventListener("click", () => adjustQuantity(record, -1));
-    node.querySelector(".qty-plus").addEventListener("click", () => adjustQuantity(record, 1));
+    const qtyMinus = node.querySelector(".qty-minus");
+    const qtyPlus = node.querySelector(".qty-plus");
+    qtyMinus.addEventListener("click", () => adjustQuantity(record, -1));
+    qtyPlus.addEventListener("click", () => adjustQuantity(record, 1));
+    qtyMinus.disabled = Number(record.quantity) <= reservedExchange + reservedPurchase;
+
+    statusSelect.addEventListener("change", async () => {
+      const oldStatus = record.tradeStatus;
+      const nextStatus = statusSelect.value;
+      if (oldStatus === nextStatus) return;
+      try {
+        await updateTradeStatus(record, nextStatus);
+      } catch (err) {
+        statusSelect.value = oldStatus;
+        showToast(`狀態更新失敗：${err.message}`);
+      }
+    });
+
+    const exMinus = node.querySelector(".reserve-exchange-minus");
+    const exPlus = node.querySelector(".reserve-exchange-plus");
+    const buyMinus = node.querySelector(".reserve-purchase-minus");
+    const buyPlus = node.querySelector(".reserve-purchase-plus");
+
+    exMinus.disabled = reservedExchange <= 0;
+    buyMinus.disabled = reservedPurchase <= 0;
+    exPlus.disabled = available <= 0;
+    buyPlus.disabled = available <= 0;
+
+    exMinus.addEventListener("click", () => adjustReservation(record, "exchange", -1));
+    exPlus.addEventListener("click", () => adjustReservation(record, "exchange", 1));
+    buyMinus.addEventListener("click", () => adjustReservation(record, "purchase", -1));
+    buyPlus.addEventListener("click", () => adjustReservation(record, "purchase", 1));
+
     node.querySelector(".delete-btn").addEventListener("click", () => deleteRecord(record));
   }
+
   return node;
 }
 function updateStats() {
@@ -283,6 +338,12 @@ function updateStats() {
   els.statSeries.textContent = seriesCount.toLocaleString();
 }
 function updateSuggestions() {
+  const seriesNames = [...new Set(records.map(r => r.seriesName).filter(Boolean))]
+    .sort((a,b) => a.localeCompare(b, "zh-Hant"));
+  if (els.seriesSuggestions) {
+    els.seriesSuggestions.innerHTML = seriesNames.map(v => `<option value="${escapeHtml(v)}"></option>`).join("");
+  }
+
   const members = [...new Set(records.map(r => r.memberName).filter(Boolean))]
     .sort((a,b) => a.localeCompare(b, "zh-Hant"));
   els.memberSuggestions.innerHTML = members.map(v => `<option value="${escapeHtml(v)}"></option>`).join("");
@@ -301,18 +362,78 @@ function updateType2Filter() {
   if (values.includes(current)) els.type2Filter.value = current;
 }
 async function adjustQuantity(record, delta) {
+  const reservedTotal = Number(record.reservedExchange || 0) + Number(record.reservedPurchase || 0);
   const next = Math.max(0, Number(record.quantity) + delta);
+
+  if (next < reservedTotal) {
+    return showToast(`在庫數量不可低於已預約數量 ${reservedTotal}`);
+  }
+
   if (next === 0) {
     if (!confirm("數量將變成 0。要直接刪除這筆紀錄嗎？")) return;
     return deleteRecord(record);
   }
+
   try {
-    if (isRemoteMode()) await api("adjustQty", { id: record.id, quantity: next });
-    record.quantity = next;
-    if (!isRemoteMode()) saveDemoRecords();
+    if (isRemoteMode()) {
+      const data = await api("adjustQty", { id: record.id, quantity: next });
+      Object.assign(record, normalizeRecord(data.item));
+    } else {
+      record.quantity = next;
+      saveDemoRecords();
+    }
     render();
   } catch (err) {
     showToast(`更新失敗：${err.message}`);
+  }
+}
+
+async function updateTradeStatus(record, nextStatus) {
+  if (!["非賣", "可換", "可賣", "求"].includes(nextStatus)) {
+    throw new Error("狀態不正確");
+  }
+
+  if (isRemoteMode()) {
+    const data = await api("updateStatus", { id: record.id, tradeStatus: nextStatus });
+    Object.assign(record, normalizeRecord(data.item));
+  } else {
+    record.tradeStatus = nextStatus;
+    saveDemoRecords();
+  }
+  render();
+  showToast("狀態已更新");
+}
+
+async function adjustReservation(record, reservationType, delta) {
+  const field = reservationType === "exchange" ? "reservedExchange" : "reservedPurchase";
+  const label = reservationType === "exchange" ? "交換" : "購買";
+
+  const current = Number(record[field] || 0);
+  const next = current + delta;
+  const reservedTotal = Number(record.reservedExchange || 0) + Number(record.reservedPurchase || 0);
+  const available = Number(record.quantity || 0) - reservedTotal;
+
+  if (next < 0) return;
+  if (delta > 0 && available <= 0) {
+    return showToast("目前沒有可用庫存可新增預約");
+  }
+
+  try {
+    if (isRemoteMode()) {
+      const data = await api("adjustReservation", {
+        id: record.id,
+        reservationType,
+        delta
+      });
+      Object.assign(record, normalizeRecord(data.item));
+    } else {
+      record[field] = next;
+      saveDemoRecords();
+    }
+    render();
+    showToast(delta > 0 ? `已新增 1 筆${label}預約` : `已取消 1 筆${label}預約`);
+  } catch (err) {
+    showToast(`預約更新失敗：${err.message}`);
   }
 }
 async function deleteRecord(record) {
@@ -398,12 +519,17 @@ function csvRowsToRecords(rows) {
     item.tradeStatus = String(item.tradeStatus).trim();
     item.quantity = Number(item.quantity);
     item.unitPrice = item.unitPrice === "" ? 0 : Number(item.unitPrice);
+    item.reservedExchange = item.reservedExchange === "" ? 0 : Number(item.reservedExchange);
+    item.reservedPurchase = item.reservedPurchase === "" ? 0 : Number(item.reservedPurchase);
     if (!item.seriesName) throw new Error(`第 ${r + 1} 列：生寫真系列不可空白`);
     if (!item.memberName) throw new Error(`第 ${r + 1} 列：成員名不可空白`);
     if (!["全身", "半身", "大頭", "坐姿"].includes(item.type)) throw new Error(`第 ${r + 1} 列：類型1必須為全身、半身、大頭或坐姿`);
     if (!["非賣", "可換", "可賣", "求"].includes(item.tradeStatus)) throw new Error(`第 ${r + 1} 列：狀態必須為非賣、可換、可賣或求`);
     if (!Number.isInteger(item.quantity) || item.quantity < 1) throw new Error(`第 ${r + 1} 列：數量必須為 1 以上整數`);
     if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) throw new Error(`第 ${r + 1} 列：單價不可小於 0`);
+    if (!Number.isInteger(item.reservedExchange) || item.reservedExchange < 0) throw new Error(`第 ${r + 1} 列：預約交換必須為 0 以上整數`);
+    if (!Number.isInteger(item.reservedPurchase) || item.reservedPurchase < 0) throw new Error(`第 ${r + 1} 列：預約購買必須為 0 以上整數`);
+    if (item.reservedExchange + item.reservedPurchase > item.quantity) throw new Error(`第 ${r + 1} 列：預約總數不可大於在庫數量`);
     result.push(item);
   }
   return result;
