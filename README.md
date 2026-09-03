@@ -201,3 +201,24 @@ Apps Script 更新後重新 Deploy New version。
 - reservedPurchaseNames
 
 更新 `Code.gs` 後，執行一次 `migrateToV5()` 即可自動備份並升級，再重新 Deploy New version。
+
+
+## V5.7 — 合併「可賣」與「可換」
+
+狀態改為三種：
+- 非賣
+- 可賣/可換
+- 求
+
+既有資料會轉換：
+- 可賣 → 可賣/可換
+- 可換 → 可賣/可換
+- 可賣・可換 → 可賣/可換
+
+更新後請在 Apps Script 執行一次：
+
+`migrateTradeStatusToCombined()`
+
+它會將 photos 工作表中的既有狀態實際改寫成新值，並清除快取。
+
+資料表欄位沒有增加，不需要重新執行 `migrateToV5()`。

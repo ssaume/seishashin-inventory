@@ -1,6 +1,6 @@
 const STORAGE_KEY = "seishashin-inventory-demo-v2";
 const SETTINGS_KEY = "seishashin-inventory-settings-v1";
-const REMOTE_VIEW_CACHE_KEY = "seishashin-inventory-remote-view-v5.6";
+const REMOTE_VIEW_CACHE_KEY = "seishashin-inventory-remote-view-v5.7";
 const PAGE_PARAMS = new URLSearchParams(window.location.search);
 const SHARE_TOKEN = PAGE_PARAMS.get("share") || "";
 const SHARE_API_URL = PAGE_PARAMS.get("api") || "";
@@ -97,13 +97,22 @@ function normalizeRecord(r) {
     ...r,
     seriesName: r.seriesName || r.photoName || "",
     type2: r.type2 || "",
-    tradeStatus: r.tradeStatus || (r.sellable === true ? "可賣" : "非賣"),
+    tradeStatus: normalizeTradeStatus(r.tradeStatus || (r.sellable === true ? "可賣/可換" : "非賣")),
     reservedExchange: Math.max(0, Number(r.reservedExchange || 0)),
     reservedPurchase: Math.max(0, Number(r.reservedPurchase || 0)),
     reservedExchangeNames: normalizeReservationNames(r.reservedExchangeNames),
     reservedPurchaseNames: normalizeReservationNames(r.reservedPurchaseNames)
   };
 }
+function normalizeTradeStatus(value) {
+  const status = String(value || "非賣").trim();
+  if (status === "可賣" || status === "可換" || status === "可賣・可換" || status === "可賣/可換") {
+    return "可賣/可換";
+  }
+  if (status === "求") return "求";
+  return "非賣";
+}
+
 function normalizeReservationNames(value) {
   if (Array.isArray(value)) return value.map(v => String(v)).filter(Boolean);
   if (!value) return [];
@@ -608,7 +617,7 @@ async function updatePrice(record, nextPrice) {
 }
 
 async function updateTradeStatus(record, nextStatus) {
-  if (!["非賣", "可換", "可賣", "求"].includes(nextStatus)) {
+  if (!["非賣", "可賣/可換", "求"].includes(nextStatus)) {
     throw new Error("狀態不正確");
   }
 
@@ -804,7 +813,8 @@ function csvRowsToRecords(rows) {
     if (!item.seriesName) throw new Error(`第 ${r + 1} 列：生寫真系列不可空白`);
     if (!item.memberName) throw new Error(`第 ${r + 1} 列：成員名不可空白`);
     if (!["全身", "半身", "大頭", "坐姿"].includes(item.type)) throw new Error(`第 ${r + 1} 列：類型1必須為全身、半身、大頭或坐姿`);
-    if (!["非賣", "可換", "可賣", "求"].includes(item.tradeStatus)) throw new Error(`第 ${r + 1} 列：狀態必須為非賣、可換、可賣或求`);
+    item.tradeStatus = normalizeTradeStatus(item.tradeStatus);
+    if (!["非賣", "可賣/可換", "求"].includes(item.tradeStatus)) throw new Error(`第 ${r + 1} 列：狀態必須為非賣、可換、可賣或求`);
     if (!Number.isInteger(item.quantity) || item.quantity < 1) throw new Error(`第 ${r + 1} 列：數量必須為 1 以上整數`);
     if (!Number.isFinite(item.unitPrice) || item.unitPrice < 0) throw new Error(`第 ${r + 1} 列：單價不可小於 0`);
     if (!Number.isInteger(item.reservedExchange) || item.reservedExchange < 0) throw new Error(`第 ${r + 1} 列：預約交換必須為 0 以上整數`);

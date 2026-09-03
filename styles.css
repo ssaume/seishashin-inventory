@@ -134,8 +134,10 @@ input:focus,select:focus { border-color: var(--accent-strong); box-shadow: 0 0 0
   box-shadow: 0 3px 12px rgba(0,0,0,.08);
 }
 .status-badge.status-非賣 { background: rgba(46,69,86,.82); color: #fff; }
-.status-badge.status-可換 { background: rgba(230,247,255,.96); color: #1479ad; }
-.status-badge.status-可賣 { background: rgba(218,244,228,.96); color: #2a7a49; }
+.status-badge.status-可賣\/可換 {
+  background: rgba(218, 244, 228, .96);
+  color: #2a7a49;
+}
 .status-badge.status-求 { background: rgba(255,239,199,.96); color: #946814; }
 
 .photo-body { padding: 14px; }
